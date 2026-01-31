@@ -218,3 +218,18 @@ def get_header_by_index(index):
 # 8️⃣ 로깅 설정
 # ============================================================================
 LOG_FORMAT = "%(asctime)s - %(levelname)s - %(message)s"
+
+# ============================================================================
+# 🔟 YouTube API 키 설정 (Google Sheets에서 읽어오기)
+# ============================================================================
+API_KEYS_TAB_NAME = 'API_키_관리'
+
+# API 키 위치 (4행부터 시작, 0-based)
+COL_API_KEY_NUMBER = 0     # A열: 번호
+COL_API_KEY_NAME = 1       # B열: 키 이름
+COL_API_KEY_VALUE = 2      # C열: API 키
+COL_API_KEY_STATUS = 3     # D열: 상태
+
+# 데이터 시작 행
+API_KEY_DATA_START_ROW = 4  # 4행부터 데이터 시작
+
