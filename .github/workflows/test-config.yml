@@ -1,88 +1,65 @@
-# .github/workflows/test-config.yml
-name: 🧪 config.py 테스트
+name: Step 1 - Extract Channel IDs
 
 on:
-  # 수동 트리거 (GitHub UI에서 실행)
   workflow_dispatch:
-
-  # 또는 main 브랜치에 push될 때 자동 실행
-  push:
-    branches:
-      - main
-    paths:
-      - 'scripts/config.py'
-      - '.github/workflows/test-config.yml'
+    inputs:
+      range:
+        description: 'Processing range (e.g., 1,101 or 1-101)'
+        required: false
+        default: '1,101'
+        type: string
+  schedule:
+    - cron: '0 9 * * *'
 
 jobs:
-  test-config:
+  step1:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
-
+    
     steps:
-      # 1️⃣ 저장소 체크아웃
-      - name: 📥 저장소 체크아웃
-        uses: actions/checkout@v4
-
-      # 2️⃣ Python 설정
-      - name: 🐍 Python 3.11 설정
+      - name: Checkout repository
+        uses: actions/checkout@v3
+      
+      - name: Set up Python 3.11
         uses: actions/setup-python@v4
         with:
           python-version: '3.11'
-
-      # 3️⃣ 의존성 설치
-      - name: 📦 라이브러리 설치
+      
+      - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-
-      # 4️⃣ config.py 테스트 (가장 중요!)
-      - name: 🧪 config.py 로드 테스트
+      
+      - name: Create data directory
+        run: mkdir -p data
+      
+      - name: Set RANGE variable
+        id: set-range
         run: |
-          echo "════════════════════════════════════════════════════════"
-          echo "🧪 config.py 검증 시작"
-          echo "════════════════════════════════════════════════════════"
-          
-          python -c "
-          import sys
-          sys.path.insert(0, 'scripts')
-          from config import *
-          
-          print('✅ config.py 로드 성공!')
-          print()
-          print('📊 컬럼 정보:')
-          print(f'  총 컬럼 수: {len(HEADERS)}')
-          print(f'  COL_CHANNEL_NAME: {COL_CHANNEL_NAME}')
-          print(f'  COL_URL: {COL_URL}')
-          print(f'  COL_HANDLE: {COL_HANDLE}')
-          print(f'  COL_CHANNEL_ID: {COL_CHANNEL_ID}')
-          print()
-          print('📁 파일 경로:')
-          print(f'  DATA_DIR: {DATA_DIR}')
-          print(f'  CHANNEL_IDS_FILE: {CHANNEL_IDS_FILE}')
-          print(f'  YOUTUBE_DATA_FILE: {YOUTUBE_DATA_FILE}')
-          print()
-          print('🌍 지원 국가:')
-          for code, name in list(COUNTRY_MAP.items())[:5]:
-              print(f'  {code}: {name}')
-          print(f'  ... 외 {len(COUNTRY_MAP) - 5}개')
-          print()
-          print('🎬 지원 카테고리:')
-          print(f'  총 {len(CATEGORY_MAP)}개')
-          print()
-          print('✅ 모든 테스트 통과!')
-          "
-
-      # 5️⃣ 상세 로그 (선택)
-      - name: 📋 상세 검증
-        run: python scripts/config.py
-
-      # 6️⃣ 결과 요약
-      - name: ✅ 테스트 완료
-        if: success()
+          if [ -z "${{ github.event.inputs.range }}" ]; then
+            echo "RANGE_VALUE=1,101" >> $GITHUB_ENV
+          else
+            echo "RANGE_VALUE=${{ github.event.inputs.range }}" >> $GITHUB_ENV
+          fi
+      
+      - name: Run Step 1 - Extract Channel IDs
+        env:
+          GOOGLE_SERVICE_ACCOUNT: ${{ secrets.GOOGLE_SERVICE_ACCOUNT }}
+          RANGE: ${{ env.RANGE_VALUE }}
+        run: python scripts/step1_extract_channel_ids.py
+      
+      - name: Check output file
         run: |
-          echo ""
-          echo "════════════════════════════════════════════════════════"
-          echo "✅ config.py 테스트 완료!"
-          echo "════════════════════════════════════════════════════════"
-          echo "다음 단계: step1_extract_channel_ids.py 작성"
-          echo "════════════════════════════════════════════════════════"
+          if [ -f data/channel_ids.json ]; then
+            echo "✅ channel_ids.json created successfully"
+            wc -l data/channel_ids.json
+          else
+            echo "⚠️ channel_ids.json not found"
+          fi
+      
+      - name: Upload results as artifact
+        if: always()
+        uses: actions/upload-artifact@v3
+        with:
+          name: step1-results
+          path: data/channel_ids.json
+          retention-days: 30
