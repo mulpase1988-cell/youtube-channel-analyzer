@@ -1,0 +1,69 @@
+# .github/workflows/step1.yml
+name: 📌 Step 1 - 채널ID 추출 (🌍 모든 언어 지원)
+
+on:
+  workflow_dispatch:
+    inputs:
+      range:
+        description: '처리 범위 (예: 1,101 또는 1-101 또는 공백=전체)'
+        required: false
+        default: '1,10'
+        type: string
+
+jobs:
+  step1:
+    name: YouTube 채널ID 추출
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - name: 📥 저장소 체크아웃
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: 🐍 Python 3.11 설정
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: 📦 Python 라이브러리 설치
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: 📁 data 폴더 생성
+        run: mkdir -p data
+
+      - name: 🔍 Step 1: YouTube 채널ID 추출 실행
+        env:
+          GOOGLE_SERVICE_ACCOUNT: ${{ secrets.GOOGLE_SERVICE_ACCOUNT }}
+          SHEET_NAME: '유튜브보물창고_테스트'
+          DATA_TAB_NAME: '데이터'
+          RANGE: ${{ github.event.inputs.range || '1,10' }}
+        
+        run: python scripts/step1_extract_channel_ids.py
+
+      - name: ✅ 결과 파일 확인
+        if: always()
+        run: |
+          echo "════════════════════════════════════════════════════════"
+          echo "✅ Step 1 완료 - 결과 확인"
+          echo "════════════════════════════════════════════════════════"
+          
+          if [ -f data/channel_ids.json ]; then
+            echo "✅ channel_ids.json 생성됨"
+            echo ""
+            head -50 data/channel_ids.json
+          else
+            echo "⚠️  channel_ids.json 없음"
+          fi
+
+      - name: 💾 결과 파일 아티팩트로 저장
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: step1-results
+          path: data/channel_ids.json
+          retention-days: 30
