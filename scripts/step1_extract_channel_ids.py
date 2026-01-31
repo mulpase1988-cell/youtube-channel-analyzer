@@ -1,6 +1,6 @@
 # scripts/step1_extract_channel_ids.py
 """
-Step 1: YouTube 채널ID 추출 (간단하고 안정적)
+Step 1: YouTube 채널ID 추출 (URL 디코딩 + Search API 사용)
 """
 
 import os
@@ -9,6 +9,7 @@ import logging
 import time
 import re
 import sys
+import urllib.parse
 from datetime import datetime, timezone
 
 import gspread
@@ -153,11 +154,21 @@ def load_api_keys(worksheet_api):
 # 채널ID 추출 함수들
 # ============================================================================
 
+def decode_url_handle(handle):
+    """URL 인코딩된 핸들 디코딩"""
+    try:
+        return urllib.parse.unquote(handle)
+    except:
+        return handle
+
 def extract_channel_id_from_url(url):
     """URL에서 channel_id 추출"""
     
     if not url:
         return None
+    
+    # URL 디코딩
+    url = decode_url_handle(url)
     
     # /channel/UC... 형식
     if '/channel/' in url:
@@ -167,37 +178,39 @@ def extract_channel_id_from_url(url):
     
     # /@handle 형식
     if '/@' in url:
-        match = re.search(r'/@([a-zA-Z0-9_-]+)', url)
+        match = re.search(r'/@([a-zA-Z0-9_\-가-힣]+)', url)
         if match:
             return '@' + match.group(1)
     
     return None
 
-def is_korean_text(text):
-    """한글 포함 여부 확인"""
-    return bool(re.search(r'[\uac00-\ud7af]', text))
-
-def get_channel_id_from_handle(handle, api_key):
-    """핸들로 채널ID 조회 (forHandle API)"""
+def get_channel_id_from_handle_search(handle, api_key):
+    """Search API로 채널 찾기 (forHandle 대체)"""
     
     if not api_key or not handle:
         return None
     
     try:
+        handle_clean = handle.lstrip('@')
+        logger.info(f"   🔍 Search API로 검색: {handle_clean}")
+        
         youtube = build('youtube', 'v3', developerKey=api_key)
         
-        response = youtube.channels().list(
-            part='id',
-            forHandle=handle.lstrip('@'),
-            maxResults=1
+        response = youtube.search().list(
+            part='snippet',
+            q=handle_clean,
+            type='channel',
+            maxResults=5,
+            order='relevance'
         ).execute()
         
         if response.get('items'):
-            channel_id = response['items'][0]['id']
-            logger.info(f"   ✓ forHandle API: {handle} → {channel_id}")
+            channel_id = response['items'][0]['id']['channelId']
+            channel_title = response['items'][0]['snippet']['title']
+            logger.info(f"   ✓ Search API: {handle_clean} → {channel_id} ({channel_title})")
             return channel_id
         
-        logger.warning(f"   ✗ forHandle API: {handle} 찾을 수 없음")
+        logger.warning(f"   ✗ Search API: {handle_clean} 찾을 수 없음")
         return None
     
     except HttpError as e:
@@ -213,6 +226,10 @@ def get_channel_id_from_handle(handle, api_key):
 
 def extract_channel_id(url, handle, api_key):
     """우선순위에 따라 channel_id 추출"""
+    
+    # URL 디코딩
+    url = decode_url_handle(url) if url else ""
+    handle = decode_url_handle(handle) if handle else ""
     
     # 1. URL에서 직접 추출
     if url:
@@ -230,18 +247,18 @@ def extract_channel_id(url, handle, api_key):
         logger.warning(f"   ✗ URL과 핸들 모두 없음")
         return None
     
-    # 2. 핸들로 API 조회
-    logger.info(f"   ℹ️ 핸들로 조회: {handle}")
-    channel_id = get_channel_id_from_handle(handle, api_key)
+    # 2. Search API로 조회
+    logger.info(f"   ℹ️ 핸들: {handle}")
+    channel_id = get_channel_id_from_handle_search(handle, api_key)
     
     if channel_id:
         return channel_id
     
-    logger.error(f"   ✗ 채널ID 추출 실패: {handle}")
+    logger.error(f"   ✗ 채널ID 추출 실패")
     return None
 
 # ============================================================================
-# 범위 파싱
+# 범위 파싱 (수정됨)
 # ============================================================================
 
 def parse_range(range_str, total_rows):
@@ -251,13 +268,19 @@ def parse_range(range_str, total_rows):
         return (2, total_rows)  # 헤더 제외
     
     try:
+        range_str = range_str.strip()
+        
         if '-' in range_str:
-            start, end = map(int, range_str.split('-'))
-            return (start, end)
+            parts = range_str.split('-')
+            start = int(parts[0].strip())
+            end = int(parts[1].strip())
+            return (max(start, 2), min(end, total_rows))  # 헤더 제외, 범위 제한
         else:
-            return (2, int(range_str))
-    except:
-        logger.warning(f"⚠️ RANGE 파싱 실패: {range_str}")
+            # 숫자 하나면 그 행까지
+            num = int(range_str)
+            return (2, min(num, total_rows))
+    except Exception as e:
+        logger.warning(f"⚠️ RANGE 파싱 실패: {range_str} ({e})")
         return (2, total_rows)
 
 # ============================================================================
@@ -286,8 +309,8 @@ def process_step1():
         range_str = os.getenv('RANGE', '').strip()
         total_rows = len(all_values)
         start_row, end_row = parse_range(range_str, total_rows)
-        start_row = max(start_row, 2)  # 헤더 제외
-        end_row = min(end_row, total_rows)
+        
+        logger.info(f"   RANGE 환경변수: '{range_str}'")
         logger.info(f"✅ 범위: {start_row}~{end_row}행 (총 {end_row - start_row + 1}행)")
         
         # [4/6] API 키 로드
@@ -309,6 +332,11 @@ def process_step1():
         
         for row_num in range(start_row, end_row + 1):
             row_idx = row_num - 1  # 0-based
+            
+            if row_idx >= len(all_values):
+                logger.warning(f"Row {row_num}: 범위 초과")
+                continue
+            
             row_data = all_values[row_idx]
             
             # 각 열 값 추출
@@ -344,7 +372,7 @@ def process_step1():
                 failed_count += 1
             
             # API 레이트 리미트 대비 대기
-            time.sleep(0.5)
+            time.sleep(1)
         
         # [6/6] 결과 저장
         logger.info("\n[6/6] 결과 저장 중...")
