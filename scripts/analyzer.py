@@ -40,7 +40,7 @@ with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.json') as f:
 # Google Sheets 설정 (환경변수 우선, 없으면 기본값)
 SHEET_NAME = os.environ.get('SHEET_NAME', '유튜브보물창고_테스트')
 API_TAB_NAME = os.environ.get('API_TAB_NAME', 'API_키_관리')
-DATA_TAB_NAME = os.environ.get('DATA_TAB_NAME', '데이터2')
+DATA_TAB_NAME = os.environ.get('DATA_TAB_NAME', '데이터')
 
 # 배치 업데이트 설정
 BATCH_SIZE = 20  # 20행씩 배치 처리
@@ -922,18 +922,27 @@ def get_channel_data_hybrid(channel_url, api_manager, row_number, row_data, work
         return None
 
 # ========================================
-# 10. 수동 입력 컬럼 보존
+# 10. 수동 입력 컬럼 보존 (배치 읽기 방식)
 # ========================================
-def preserve_manual_columns(worksheet, row_num):
-    """수동 입력 컬럼의 기존 값 읽기"""
+
+def preserve_manual_columns_batch(all_sheet_data, row_num):
+    """배치 읽기된 데이터에서 수동 컬럼 값 추출"""
     try:
+        row_idx = row_num - 1
+        if row_idx >= len(all_sheet_data):
+            return {col: '' for col in MANUAL_INPUT_COLUMNS}
+        
+        row_data = all_sheet_data[row_idx]
         manual_values = {}
+        
         for col in MANUAL_INPUT_COLUMNS:
-            cell_value = worksheet.cell(row_num, col).value
+            # 메모리에서 읽기 (Sheets API 호출 없음!)
+            cell_value = row_data[col - 1] if len(row_data) >= col else ''
             manual_values[col] = cell_value if cell_value else ''
+        
         return manual_values
     except Exception as e:
-        print(f"⚠️ 수동 컬럼 읽기 실패: {e}")
+        print(f"⚠️ 수동 컬럼 추출 실패: {e}")
         return {col: '' for col in MANUAL_INPUT_COLUMNS}
 
 # ========================================
@@ -1090,7 +1099,8 @@ def main():
                 print(f"📌 URL: {url}")
                 print(f"📌 핸들: {handle}")
 
-                manual_values = preserve_manual_columns(worksheet, row_num)
+                # ✅ 수정: preserve_manual_columns_batch 사용
+                manual_values = preserve_manual_columns_batch(all_sheet_data, row_num)
 
                 data = get_channel_data_hybrid(url, api_manager, row_num, row_data, worksheet)
 
