@@ -1,6 +1,6 @@
 # ========================================
 # YouTube 채널 분석기 v2 - GitHub Actions 버전
-# RSS + YouTube API 하이브리드 방식
+# RSS + YouTube API 하이브리드 방식 + Shorts 채널 대응
 # ========================================
 
 # ========================================
@@ -491,7 +491,7 @@ def extract_channel_id_ytdlp(url):
 # 7. 메인 채널 데이터 수집
 # ========================================
 def get_channel_data_hybrid(channel_url, api_manager, row_number, row_data, worksheet):
-    """RSS + API 하이브리드 방식으로 채널 데이터 수집"""
+    """RSS + API 하이브리드 방식으로 채널 데이터 수집 (Shorts 채널 대응)"""
     result = {
         'channel_name': '',
         'handle': '',
@@ -556,7 +556,7 @@ def get_channel_data_hybrid(channel_url, api_manager, row_number, row_data, work
         rss_videos = parse_rss_feed(channel_id, max_videos=15)
         print(f"  ✓ RSS에서 {len(rss_videos)}개 영상 수집")
 
-        api_key_info = api_manager.get_key_for_row(row_number, required_quota=3)
+        api_key_info = api_manager.get_key_for_row(row_number, required_quota=110)
         api_key = api_key_info['key']
         key_name = api_key_info['name']
 
@@ -597,26 +597,58 @@ def get_channel_data_hybrid(channel_url, api_manager, row_number, row_data, work
 
         uploads_playlist_id = channel_info['contentDetails']['relatedPlaylists']['uploads']
 
-        playlist_response = youtube.playlistItems().list(
-            part='contentDetails',
-            playlistId=uploads_playlist_id,
-            maxResults=30
-        ).execute()
-
-        api_manager.update_quota_used(key_name, 1)
-
+        # ✅ Shorts 전용 채널 처리 추가
         api_videos = []
-        for item in playlist_response['items'][15:30]:
-            video_id = item['contentDetails']['videoId']
-            api_videos.append(video_id)
+        is_shorts_only = False
 
-        print(f"  ✓ API에서 {len(api_videos)}개 영상 수집 (16~30번째)")
+        try:
+            playlist_response = youtube.playlistItems().list(
+                part='contentDetails',
+                playlistId=uploads_playlist_id,
+                maxResults=30
+            ).execute()
+            api_manager.update_quota_used(key_name, 1)
+            
+            # 일반 영상 추출
+            for item in playlist_response['items'][15:30]:
+                video_id = item['contentDetails']['videoId']
+                api_videos.append(video_id)
+            print(f"  ✓ API에서 {len(api_videos)}개 영상 수집 (16~30번째)")
+            
+        except HttpError as e:
+            if e.resp.status == 404:
+                # 🎬 Shorts 전용 채널 감지
+                print(f"  ⚠️  업로드 플레이리스트 없음 → Shorts 전용 채널 감지!")
+                is_shorts_only = True
+                api_manager.update_quota_used(key_name, 1)
+                
+                # Search API로 Shorts 검색
+                print(f"  🔍 Search API로 Shorts 검색 중...")
+                try:
+                    shorts_response = youtube.search().list(
+                        part='id,snippet',
+                        channelId=channel_id,
+                        type='video',
+                        videoDuration='short',  # 60초 이하 = Shorts
+                        maxResults=30,
+                        order='date'  # 최신순
+                    ).execute()
+                    api_manager.update_quota_used(key_name, 100)
+                    
+                    api_videos = [item['id']['videoId'] for item in shorts_response.get('items', [])]
+                    print(f"  ✓ Search API에서 {len(api_videos)}개 Shorts 수집")
+                    
+                except Exception as search_error:
+                    print(f"  ⚠️  Shorts Search 실패: {search_error}")
+                    api_videos = []
+            else:
+                raise
 
         all_video_ids = [v['video_id'] for v in rss_videos if v['video_id']] + api_videos
         all_video_ids = all_video_ids[:30]
 
         if not all_video_ids:
-            print(f"  ⚠️  수집된 영상이 없습니다")
+            print(f"  ⚠️  수집된 영상이 없습니다 (Shorts 전용 채널)")
             return result
 
         videos_response = youtube.videos().list(
