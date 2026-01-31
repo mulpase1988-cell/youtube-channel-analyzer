@@ -488,7 +488,74 @@ def extract_channel_id_ytdlp(url):
     return None
 
 # ========================================
-# 7. 메인 채널 데이터 수집
+# 7. Shorts 채널 데이터 수집
+# ========================================
+def get_shorts_channel_data(channel_id, youtube, api_manager, key_name):
+    """Shorts 전용 채널에서 영상 데이터 수집"""
+    api_videos = []
+    
+    print(f"  🎬 활동 피드에서 Shorts 검색 중...")
+    try:
+        # Activities 조회로 최근 업로드된 영상 ID 추출
+        activities_response = youtube.activities().list(
+            part='contentDetails',
+            channelId=channel_id,
+            maxResults=50
+        ).execute()
+        api_manager.update_quota_used(key_name, 1)
+        
+        # Activities에서 video ID 추출
+        for activity in activities_response.get('items', []):
+            content = activity.get('contentDetails', {})
+            if 'upload' in content:
+                video_id = content['upload'].get('videoId')
+                if video_id:
+                    api_videos.append(video_id)
+        
+        print(f"  ✓ 활동 피드에서 {len(api_videos)}개 영상 추출")
+        
+        if not api_videos:
+            print(f"  ⚠️  활동 피드에서 영상을 찾을 수 없음")
+            return []
+        
+        # 추출한 영상의 duration 확인해서 Shorts만 필터링
+        api_videos = api_videos[:30]
+        
+        videos_response = youtube.videos().list(
+            part='contentDetails',
+            id=','.join(api_videos)
+        ).execute()
+        api_manager.update_quota_used(key_name, 1)
+        
+        shorts_video_ids = []
+        for video in videos_response.get('items', []):
+            duration_str = video['contentDetails'].get('duration', '')
+            
+            # ISO 8601 형식 파싱 (PT1M30S = 1분 30초)
+            try:
+                import re as regex_module
+                match = regex_module.match(r'PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?', duration_str)
+                if match:
+                    hours = int(match.group(1) or 0)
+                    minutes = int(match.group(2) or 0)
+                    seconds = int(match.group(3) or 0)
+                    total_seconds = hours * 3600 + minutes * 60 + seconds
+                    
+                    # Shorts: 60초 이하
+                    if total_seconds <= 60:
+                        shorts_video_ids.append(video['id'])
+            except:
+                pass
+        
+        print(f"  ✓ Shorts 필터링 완료: {len(shorts_video_ids)}개 Shorts 수집")
+        return shorts_video_ids
+    
+    except Exception as e:
+        print(f"  ⚠️  활동 피드 조회 실패: {e}")
+        return []
+
+# ========================================
+# 8. 메인 채널 데이터 수집
 # ========================================
 def get_channel_data_hybrid(channel_url, api_manager, row_number, row_data, worksheet):
     """RSS + API 하이브리드 방식으로 채널 데이터 수집 (Shorts 채널 대응)"""
@@ -597,7 +664,7 @@ def get_channel_data_hybrid(channel_url, api_manager, row_number, row_data, work
 
         uploads_playlist_id = channel_info['contentDetails']['relatedPlaylists']['uploads']
 
-        # ✅ Shorts 전용 채널 처리 추가
+        # ✅ Shorts 전용 채널 처리
         api_videos = []
         is_shorts_only = False
 
@@ -622,25 +689,8 @@ def get_channel_data_hybrid(channel_url, api_manager, row_number, row_data, work
                 is_shorts_only = True
                 api_manager.update_quota_used(key_name, 1)
                 
-                # Search API로 Shorts 검색
-                print(f"  🔍 Search API로 Shorts 검색 중...")
-                try:
-                    shorts_response = youtube.search().list(
-                        part='id,snippet',
-                        channelId=channel_id,
-                        type='video',
-                        videoDuration='short',  # 60초 이하 = Shorts
-                        maxResults=30,
-                        order='date'  # 최신순
-                    ).execute()
-                    api_manager.update_quota_used(key_name, 100)
-                    
-                    api_videos = [item['id']['videoId'] for item in shorts_response.get('items', [])]
-                    print(f"  ✓ Search API에서 {len(api_videos)}개 Shorts 수집")
-                    
-                except Exception as search_error:
-                    print(f"  ⚠️  Shorts Search 실패: {search_error}")
-                    api_videos = []
+                # Activities API로 Shorts 조회
+                api_videos = get_shorts_channel_data(channel_id, youtube, api_manager, key_name)
             else:
                 raise
 
@@ -747,7 +797,7 @@ def get_channel_data_hybrid(channel_url, api_manager, row_number, row_data, work
         return None
 
 # ========================================
-# 8. 수동 입력 컬럼 보존
+# 9. 수동 입력 컬럼 보존
 # ========================================
 def preserve_manual_columns(worksheet, row_num):
     """수동 입력 컬럼의 기존 값 읽기"""
@@ -762,7 +812,7 @@ def preserve_manual_columns(worksheet, row_num):
         return {col: '' for col in MANUAL_INPUT_COLUMNS}
 
 # ========================================
-# 9. 배치 업데이트
+# 10. 배치 업데이트
 # ========================================
 def update_row_batch(worksheet, row_num, data_dict, manual_values):
     """33개 셀을 한 번에 업데이트 (B열 URL은 보존)"""
@@ -813,7 +863,7 @@ def update_row_batch(worksheet, row_num, data_dict, manual_values):
         return False
 
 # ========================================
-# 10. 메인 실행
+# 11. 메인 실행
 # ========================================
 def main():
     """메인 실행 함수"""
@@ -938,7 +988,7 @@ def main():
         traceback.print_exc()
 
 # ========================================
-# 11. 실행
+# 12. 실행
 # ========================================
 if __name__ == '__main__':
     main()
