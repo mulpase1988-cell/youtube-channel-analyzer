@@ -1,4 +1,5 @@
-name: Step 1 
+name: Step 1 - Extract Channel IDs
+
 on:
   workflow_dispatch:
     inputs:
@@ -16,7 +17,7 @@ jobs:
     
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
       
       - name: Set up Python 3.11
         uses: actions/setup-python@v4
@@ -56,7 +57,7 @@ jobs:
       
       - name: Upload results as artifact
         if: always()
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: step1-results
           path: data/channel_ids.json
