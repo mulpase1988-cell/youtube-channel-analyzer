@@ -1,0 +1,54 @@
+name: 채널 분석기
+
+on:
+  # 매일 자정 UTC (한국 시간 오전 9시) 자동 실행
+  schedule:
+    - cron: '0 0 * * *'
+  
+  # 수동 실행 버튼
+  workflow_dispatch:
+    inputs:
+      range:
+        description: '처리 범위 (예: 2-50, 비우면 전체)'
+        required: false
+        type: string
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360  # 6시간 제한
+    
+    steps:
+      - name: 📥 코드 체크아웃
+        uses: actions/checkout@v3
+      
+      - name: 🐍 Python 설치
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+      
+      - name: 📦 패키지 설치
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+      
+      - name: 🚀 채널 분석 실행
+        env:
+          GOOGLE_SERVICE_ACCOUNT: ${{ secrets.GOOGLE_SERVICE_ACCOUNT }}
+          SHEET_NAME: ${{ secrets.SHEET_NAME }}
+          API_TAB_NAME: ${{ secrets.API_TAB_NAME }}
+          DATA_TAB_NAME: ${{ secrets.DATA_TAB_NAME }}
+          RANGE: ${{ inputs.range }}
+        run: |
+          echo "🚀 분석 시작..."
+          python scripts/analyzer.py
+      
+      - name: 📊 결과 업로드
+        if: always()
+        uses: actions/upload-artifact@v3
+        with:
+          name: analysis-logs
+          path: |
+            *.log
+          retention-days: 7
