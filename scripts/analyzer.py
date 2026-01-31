@@ -1,6 +1,6 @@
 # ========================================
 # YouTube 채널 분석기 v2 - GitHub Actions 버전
-# RSS + YouTube API 하이브리드 방식 + Shorts 채널 대응
+# RSS + YouTube API 하이브리드 방식 + Shorts 채널 + 재시도 로직 + 선택적 업데이트
 # ========================================
 
 # ========================================
@@ -21,6 +21,7 @@ import urllib.parse
 import traceback
 import os
 import tempfile
+import random
 
 # ========================================
 # 2. 설정 변수
@@ -76,6 +77,11 @@ COL_VIDEO_LINKS = [29, 30, 31, 32, 33]  # AC~AG: 영상1~5
 MANUAL_INPUT_COLUMNS = [COL_CATEGORY_1, COL_CATEGORY_2, COL_MEMO, 
                         COL_KEYWORD, COL_NOTE, COL_TEMPLATE]
 
+# 재시도 설정
+MAX_RETRIES = 3
+RETRY_DELAY = 2  # 초
+RATE_LIMIT_WAIT = 60  # Rate Limit 시 대기 시간
+
 # 국가 코드 → 한글 매핑
 COUNTRY_MAP = {
     'KR': '한국', 'US': '미국', 'JP': '일본', 'GB': '영국', 
@@ -97,7 +103,46 @@ CATEGORY_MAP = {
 }
 
 # ========================================
-# 3. 헬퍼 함수들
+# 3. 재시도 데코레이터
+# ========================================
+def retry_with_backoff(func):
+    """지수 백오프를 사용한 재시도 데코레이터"""
+    def wrapper(*args, **kwargs):
+        for attempt in range(MAX_RETRIES):
+            try:
+                return func(*args, **kwargs)
+            except HttpError as e:
+                # 429: Rate Limit
+                if e.resp.status == 429:
+                    wait_time = RATE_LIMIT_WAIT * (2 ** attempt) + random.uniform(0, 1)
+                    print(f"  ⚠️  Rate Limit 감지! {wait_time:.1f}초 대기 후 재시도 ({attempt + 1}/{MAX_RETRIES})...")
+                    time.sleep(wait_time)
+                    continue
+                # 500: 서버 오류
+                elif e.resp.status >= 500:
+                    wait_time = RETRY_DELAY * (2 ** attempt)
+                    print(f"  ⚠️  서버 오류 ({e.resp.status})! {wait_time:.1f}초 대기 후 재시도 ({attempt + 1}/{MAX_RETRIES})...")
+                    time.sleep(wait_time)
+                    continue
+                # 기타 에러는 즉시 반환
+                else:
+                    raise
+            except Exception as e:
+                # 네트워크 오류 등 일시적 오류는 재시도
+                if attempt < MAX_RETRIES - 1:
+                    wait_time = RETRY_DELAY * (2 ** attempt)
+                    print(f"  ⚠️  일시적 오류: {str(e)[:50]}... {wait_time:.1f}초 대기 후 재시도 ({attempt + 1}/{MAX_RETRIES})...")
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    raise
+        
+        raise Exception(f"❌ {MAX_RETRIES}회 재시도 후에도 실패")
+    
+    return wrapper
+
+# ========================================
+# 4. 헬퍼 함수들
 # ========================================
 def get_country_name(country_code):
     """국가 코드를 한글명으로 변환 (빈 값이면 '한국' 기본값)"""
@@ -140,7 +185,7 @@ def parse_published_date(date_str):
         return None
 
 # ========================================
-# 4. API 키 매니저
+# 5. API 키 매니저
 # ========================================
 class YouTubeAPIKeyManager:
     """YouTube API 키 관리 및 쿼터 추적"""
@@ -333,7 +378,7 @@ class YouTubeAPIKeyManager:
         print("="*80 + "\n")
 
 # ========================================
-# 5. RSS 피드 파싱
+# 6. RSS 피드 파싱
 # ========================================
 def parse_rss_feed(channel_id, max_videos=15):
     """YouTube RSS 피드에서 최근 영상 정보 추출"""
@@ -347,24 +392,28 @@ def parse_rss_feed(channel_id, max_videos=15):
 
         videos = []
         for entry in feed.entries[:max_videos]:
-            video_id = entry.yt_videoid if hasattr(entry, 'yt_videoid') else None
-            if not video_id and 'id' in entry:
-                video_id = entry.id.split(':')[-1]
+            try:
+                video_id = entry.yt_videoid if hasattr(entry, 'yt_videoid') else None
+                if not video_id and 'id' in entry:
+                    video_id = entry.id.split(':')[-1]
 
-            published_str = entry.published if hasattr(entry, 'published') else None
-            published_at = None
-            if published_str:
-                try:
-                    from email.utils import parsedate_to_datetime
-                    published_at = parsedate_to_datetime(published_str)
-                except:
-                    pass
+                published_str = entry.published if hasattr(entry, 'published') else None
+                published_at = None
+                if published_str:
+                    try:
+                        from email.utils import parsedate_to_datetime
+                        published_at = parsedate_to_datetime(published_str)
+                    except:
+                        pass
 
-            videos.append({
-                'video_id': video_id,
-                'title': entry.title if hasattr(entry, 'title') else '',
-                'published_at': published_at
-            })
+                videos.append({
+                    'video_id': video_id,
+                    'title': entry.title if hasattr(entry, 'title') else '',
+                    'published_at': published_at
+                })
+            except Exception as e:
+                print(f"  ⚠️  RSS 항목 파싱 실패: {e}")
+                continue
 
         return videos
 
@@ -373,7 +422,7 @@ def parse_rss_feed(channel_id, max_videos=15):
         return []
 
 # ========================================
-# 6. 채널 ID 추출
+# 7. 채널 ID 추출
 # ========================================
 def extract_channel_id_from_url(channel_url, api_manager, row_number, row_data=None):
     """채널 URL에서 channel_id 추출"""
@@ -401,12 +450,15 @@ def extract_channel_id_from_url(channel_url, api_manager, row_number, row_data=N
 
                 youtube = build('youtube', 'v3', developerKey=api_key)
 
-                channel_response = youtube.channels().list(
-                    part='id',
-                    forHandle=handle_decoded,
-                    maxResults=1
-                ).execute()
+                @retry_with_backoff
+                def call_api():
+                    return youtube.channels().list(
+                        part='id',
+                        forHandle=handle_decoded,
+                        maxResults=1
+                    ).execute()
 
+                channel_response = call_api()
                 api_manager.update_quota_used(key_name, 1)
 
                 if channel_response['items']:
@@ -433,12 +485,15 @@ def extract_channel_id_from_url(channel_url, api_manager, row_number, row_data=N
 
         youtube = build('youtube', 'v3', developerKey=api_key)
 
-        channel_response = youtube.channels().list(
-            part='id',
-            forHandle=handle,
-            maxResults=1
-        ).execute()
+        @retry_with_backoff
+        def call_api():
+            return youtube.channels().list(
+                part='id',
+                forHandle=handle,
+                maxResults=1
+            ).execute()
 
+        channel_response = call_api()
         api_manager.update_quota_used(key_name, 1)
 
         if channel_response['items']:
@@ -488,7 +543,7 @@ def extract_channel_id_ytdlp(url):
     return None
 
 # ========================================
-# 7. Shorts 채널 데이터 수집
+# 8. Shorts 채널 데이터 수집
 # ========================================
 def get_shorts_channel_data(channel_id, youtube, api_manager, key_name):
     """Shorts 전용 채널에서 영상 데이터 수집"""
@@ -496,21 +551,28 @@ def get_shorts_channel_data(channel_id, youtube, api_manager, key_name):
     
     print(f"  🎬 활동 피드에서 Shorts 검색 중...")
     try:
-        # Activities 조회로 최근 업로드된 영상 ID 추출
-        activities_response = youtube.activities().list(
-            part='contentDetails',
-            channelId=channel_id,
-            maxResults=50
-        ).execute()
+        @retry_with_backoff
+        def call_activities():
+            return youtube.activities().list(
+                part='contentDetails',
+                channelId=channel_id,
+                maxResults=50
+            ).execute()
+
+        activities_response = call_activities()
         api_manager.update_quota_used(key_name, 1)
         
         # Activities에서 video ID 추출
         for activity in activities_response.get('items', []):
-            content = activity.get('contentDetails', {})
-            if 'upload' in content:
-                video_id = content['upload'].get('videoId')
-                if video_id:
-                    api_videos.append(video_id)
+            try:
+                content = activity.get('contentDetails', {})
+                if 'upload' in content:
+                    video_id = content['upload'].get('videoId')
+                    if video_id:
+                        api_videos.append(video_id)
+            except Exception as e:
+                print(f"  ⚠️  활동 항목 파싱 실패: {e}")
+                continue
         
         print(f"  ✓ 활동 피드에서 {len(api_videos)}개 영상 추출")
         
@@ -521,18 +583,22 @@ def get_shorts_channel_data(channel_id, youtube, api_manager, key_name):
         # 추출한 영상의 duration 확인해서 Shorts만 필터링
         api_videos = api_videos[:30]
         
-        videos_response = youtube.videos().list(
-            part='contentDetails',
-            id=','.join(api_videos)
-        ).execute()
+        @retry_with_backoff
+        def call_videos():
+            return youtube.videos().list(
+                part='contentDetails',
+                id=','.join(api_videos)
+            ).execute()
+
+        videos_response = call_videos()
         api_manager.update_quota_used(key_name, 1)
         
         shorts_video_ids = []
         for video in videos_response.get('items', []):
-            duration_str = video['contentDetails'].get('duration', '')
-            
-            # ISO 8601 형식 파싱 (PT1M30S = 1분 30초)
             try:
+                duration_str = video['contentDetails'].get('duration', '')
+                
+                # ISO 8601 형식 파싱 (PT1M30S = 1분 30초)
                 import re as regex_module
                 match = regex_module.match(r'PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?', duration_str)
                 if match:
@@ -544,8 +610,9 @@ def get_shorts_channel_data(channel_id, youtube, api_manager, key_name):
                     # Shorts: 60초 이하
                     if total_seconds <= 60:
                         shorts_video_ids.append(video['id'])
-            except:
-                pass
+            except Exception as e:
+                print(f"  ⚠️  영상 정보 파싱 실패: {e}")
+                continue
         
         print(f"  ✓ Shorts 필터링 완료: {len(shorts_video_ids)}개 Shorts 수집")
         return shorts_video_ids
@@ -555,10 +622,10 @@ def get_shorts_channel_data(channel_id, youtube, api_manager, key_name):
         return []
 
 # ========================================
-# 8. 메인 채널 데이터 수집
+# 9. 메인 채널 데이터 수집
 # ========================================
 def get_channel_data_hybrid(channel_url, api_manager, row_number, row_data, worksheet):
-    """RSS + API 하이브리드 방식으로 채널 데이터 수집 (Shorts 채널 대응)"""
+    """RSS + API 하이브리드 방식으로 채널 데이터 수집 (Shorts 채널 + 개설일 + 선택적 업데이트)"""
     result = {
         'channel_name': '',
         'handle': '',
@@ -629,11 +696,14 @@ def get_channel_data_hybrid(channel_url, api_manager, row_number, row_data, work
 
         youtube = build('youtube', 'v3', developerKey=api_key)
 
-        channel_response = youtube.channels().list(
-            part='snippet,statistics,contentDetails',
-            id=channel_id
-        ).execute()
+        @retry_with_backoff
+        def call_channels():
+            return youtube.channels().list(
+                part='snippet,statistics,contentDetails',
+                id=channel_id
+            ).execute()
 
+        channel_response = call_channels()
         api_manager.update_quota_used(key_name, 1)
 
         if not channel_response['items']:
@@ -660,7 +730,15 @@ def get_channel_data_hybrid(channel_url, api_manager, row_number, row_data, work
         result['total_views'] = int(statistics.get('viewCount', 0))
 
         print(f"  ✓ 채널: {result['channel_name']}")
-        print(f"  ✓ 구독자: {result['subscribers']:,} | 영상: {result['video_count']:,}")
+        print(f"  ✓ 구독자: {result['subscribers']:,} | 영상: {result['video_count']:,} | 총조회수: {result['total_views']:,}")
+
+        # ✅ 채널 개설일 저장 (비용 0 - 이미 받은 데이터에서 추출)
+        channel_created = snippet.get('publishedAt', '')
+        if channel_created:
+            channel_created_date = channel_created[:10]  # YYYY-MM-DD
+            print(f"  📅 채널 개설일: {channel_created_date}")
+        else:
+            channel_created_date = ''
 
         uploads_playlist_id = channel_info['contentDetails']['relatedPlaylists']['uploads']
 
@@ -669,17 +747,26 @@ def get_channel_data_hybrid(channel_url, api_manager, row_number, row_data, work
         is_shorts_only = False
 
         try:
-            playlist_response = youtube.playlistItems().list(
-                part='contentDetails',
-                playlistId=uploads_playlist_id,
-                maxResults=30
-            ).execute()
+            @retry_with_backoff
+            def call_playlist():
+                return youtube.playlistItems().list(
+                    part='contentDetails',
+                    playlistId=uploads_playlist_id,
+                    maxResults=30
+                ).execute()
+
+            playlist_response = call_playlist()
             api_manager.update_quota_used(key_name, 1)
             
             # 일반 영상 추출
-            for item in playlist_response['items'][15:30]:
-                video_id = item['contentDetails']['videoId']
-                api_videos.append(video_id)
+            for item in playlist_response.get('items', [])[15:30]:
+                try:
+                    video_id = item['contentDetails']['videoId']
+                    api_videos.append(video_id)
+                except Exception as e:
+                    print(f"  ⚠️  플레이리스트 항목 파싱 실패: {e}")
+                    continue
+
             print(f"  ✓ API에서 {len(api_videos)}개 영상 수집 (16~30번째)")
             
         except HttpError as e:
@@ -699,35 +786,55 @@ def get_channel_data_hybrid(channel_url, api_manager, row_number, row_data, work
 
         if not all_video_ids:
             print(f"  ⚠️  수집된 영상이 없습니다 (Shorts 전용 채널)")
+            # ✅ 영상이 없을 때 채널 개설일 사용
+            if channel_created_date and not result['first_upload']:
+                result['first_upload'] = channel_created_date
+                try:
+                    created_date = datetime.fromisoformat(channel_created.replace('Z', '+00:00'))
+                    now = datetime.now(timezone.utc)
+                    result['operation_days'] = (now - created_date).days
+                    print(f"  ✅ 최초업로드 (채널 개설일): {result['first_upload']}")
+                except:
+                    pass
             return result
 
-        videos_response = youtube.videos().list(
-            part='statistics,snippet',
-            id=','.join(all_video_ids)
-        ).execute()
+        @retry_with_backoff
+        def call_videos():
+            return youtube.videos().list(
+                part='statistics,snippet',
+                id=','.join(all_video_ids)
+            ).execute()
 
+        videos_response = call_videos()
         api_manager.update_quota_used(key_name, 1)
 
         view_map = {}
-        for video in videos_response['items']:
-            video_id = video['id']
-            view_count = int(video['statistics'].get('viewCount', 0))
-            published_str = video['snippet'].get('publishedAt', '')
+        for video in videos_response.get('items', []):
+            try:
+                video_id = video['id']
+                view_count = int(video['statistics'].get('viewCount', 0))
+                published_str = video['snippet'].get('publishedAt', '')
 
-            published_at = None
-            if published_str:
-                try:
-                    published_at = datetime.fromisoformat(published_str.replace('Z', '+00:00'))
-                except:
-                    pass
+                published_at = None
+                if published_str:
+                    try:
+                        published_at = datetime.fromisoformat(published_str.replace('Z', '+00:00'))
+                    except:
+                        pass
 
-            view_map[video_id] = (view_count, published_at)
+                view_map[video_id] = (view_count, published_at)
+            except Exception as e:
+                print(f"  ⚠️  비디오 정보 파싱 실패: {e}")
+                continue
 
-        if videos_response['items']:
-            first_category_id = videos_response['items'][0]['snippet'].get('categoryId', '')
-            result['yt_category'] = get_category_name(first_category_id)
+        if videos_response.get('items'):
+            try:
+                first_category_id = videos_response['items'][0]['snippet'].get('categoryId', '')
+                result['yt_category'] = get_category_name(first_category_id)
+            except:
+                pass
 
-        result['video_links'] = get_video_urls([v['id'] for v in videos_response['items']], max_count=5)
+        result['video_links'] = get_video_urls([v['id'] for v in videos_response.get('items', [])], max_count=5)
 
         views_list = []
         for video_id in all_video_ids:
@@ -751,22 +858,26 @@ def get_channel_data_hybrid(channel_url, api_manager, row_number, row_data, work
             if video_id not in view_map:
                 continue
 
-            view_count, published_at = view_map[video_id]
+            try:
+                view_count, published_at = view_map[video_id]
 
-            if not published_at:
+                if not published_at:
+                    continue
+
+                days_ago = (now - published_at).days
+
+                if days_ago <= 15:
+                    print(f"    📅 {video_id}: {days_ago}일 전 | {view_count:,}회")
+
+                if days_ago <= 5:
+                    views_5d_list.append(view_count)
+                if days_ago <= 10:
+                    views_10d_list.append(view_count)
+                if days_ago <= 15:
+                    views_15d_list.append(view_count)
+            except Exception as e:
+                print(f"  ⚠️  조회수 계산 실패: {e}")
                 continue
-
-            days_ago = (now - published_at).days
-
-            if days_ago <= 15:
-                print(f"    📅 {video_id}: {days_ago}일 전 | {view_count:,}회")
-
-            if days_ago <= 5:
-                views_5d_list.append(view_count)
-            if days_ago <= 10:
-                views_10d_list.append(view_count)
-            if days_ago <= 15:
-                views_15d_list.append(view_count)
 
         result['views_5d'] = sum(views_5d_list)
         result['views_10d'] = sum(views_10d_list)
@@ -783,11 +894,22 @@ def get_channel_data_hybrid(channel_url, api_manager, row_number, row_data, work
             if video_id in view_map and view_map[video_id][1]:
                 dates.append(view_map[video_id][1])
 
+        # ✅ 최초업로드 결정 로직 (개설일 포함)
         if dates:
             result['latest_upload'] = max(dates).strftime('%Y-%m-%d')
             result['first_upload'] = min(dates).strftime('%Y-%m-%d')
             first_date = min(dates)
             result['operation_days'] = (now - first_date).days
+            print(f"  ✅ 최초업로드 (영상): {result['first_upload']}")
+        elif channel_created_date:
+            # 영상 데이터가 없으면 채널 개설일 사용
+            result['first_upload'] = channel_created_date
+            try:
+                created_date = datetime.fromisoformat(channel_created.replace('Z', '+00:00'))
+                result['operation_days'] = (now - created_date).days
+                print(f"  ✅ 최초업로드 (채널 개설일): {result['first_upload']}")
+            except:
+                pass
 
         return result
 
@@ -797,7 +919,7 @@ def get_channel_data_hybrid(channel_url, api_manager, row_number, row_data, work
         return None
 
 # ========================================
-# 9. 수동 입력 컬럼 보존
+# 10. 수동 입력 컬럼 보존
 # ========================================
 def preserve_manual_columns(worksheet, row_num):
     """수동 입력 컬럼의 기존 값 읽기"""
@@ -812,49 +934,76 @@ def preserve_manual_columns(worksheet, row_num):
         return {col: '' for col in MANUAL_INPUT_COLUMNS}
 
 # ========================================
-# 10. 배치 업데이트
+# 11. 배치 업데이트 (선택적)
 # ========================================
-def update_row_batch(worksheet, row_num, data_dict, manual_values):
-    """33개 셀을 한 번에 업데이트 (B열 URL은 보존)"""
+def update_row_batch(worksheet, row_num, data_dict, manual_values, row_data):
+    """33개 셀을 한 번에 업데이트 (B열 URL은 보존, I/J/K는 비어있을 때만 업데이트)"""
     try:
         existing_url = worksheet.cell(row_num, COL_URL).value or ''
         
-        row_data = [''] * 33
+        # ✅ 기존 값 확인 (I, J, K)
+        existing_video_count = ''
+        existing_total_views = ''
+        existing_first_upload = ''
+        
+        if len(row_data) >= COL_VIDEO_COUNT:
+            existing_video_count = str(row_data[COL_VIDEO_COUNT - 1]).strip()
+        if len(row_data) >= COL_TOTAL_VIEWS:
+            existing_total_views = str(row_data[COL_TOTAL_VIEWS - 1]).strip()
+        if len(row_data) >= COL_FIRST_UPLOAD:
+            existing_first_upload = str(row_data[COL_FIRST_UPLOAD - 1]).strip()
+        
+        row_data_update = [''] * 33
 
-        row_data[COL_CHANNEL_NAME - 1] = data_dict.get('channel_name', '')
-        row_data[COL_URL - 1] = existing_url
-        row_data[COL_HANDLE - 1] = data_dict.get('handle', '')
-        row_data[COL_COUNTRY - 1] = data_dict.get('country', '')
-        row_data[COL_SUBSCRIBERS - 1] = data_dict.get('subscribers', 0)
-        row_data[COL_VIDEO_COUNT - 1] = data_dict.get('video_count', 0)
-        row_data[COL_TOTAL_VIEWS - 1] = data_dict.get('total_views', 0)
-        row_data[COL_FIRST_UPLOAD - 1] = data_dict.get('first_upload', '')
-        row_data[COL_LATEST_UPLOAD - 1] = data_dict.get('latest_upload', '')
-        row_data[COL_COLLECT_DATE - 1] = data_dict.get('collect_date', '')
-        row_data[COL_VIEWS_5_TOTAL - 1] = data_dict.get('views_5', 0)
-        row_data[COL_VIEWS_10_TOTAL - 1] = data_dict.get('views_10', 0)
-        row_data[COL_VIEWS_20_TOTAL - 1] = data_dict.get('views_20', 0)
-        row_data[COL_VIEWS_30_TOTAL - 1] = data_dict.get('views_30', 0)
-        row_data[COL_OPERATION_DAYS - 1] = data_dict.get('operation_days', 0)
-        row_data[COL_COUNT_5D - 1] = data_dict.get('count_5d', 0)
-        row_data[COL_COUNT_10D - 1] = data_dict.get('count_10d', 0)
-        row_data[COL_CHANNEL_ID - 1] = data_dict.get('channel_id', '')
-        row_data[COL_VIEWS_5D - 1] = data_dict.get('views_5d', 0)
-        row_data[COL_VIEWS_10D - 1] = data_dict.get('views_10d', 0)
-        row_data[COL_VIEWS_15D - 1] = data_dict.get('views_15d', 0)
-        row_data[COL_YT_CATEGORY - 1] = data_dict.get('yt_category', '미분류')
+        row_data_update[COL_CHANNEL_NAME - 1] = data_dict.get('channel_name', '')
+        row_data_update[COL_URL - 1] = existing_url
+        row_data_update[COL_HANDLE - 1] = data_dict.get('handle', '')
+        row_data_update[COL_COUNTRY - 1] = data_dict.get('country', '')
+        row_data_update[COL_SUBSCRIBERS - 1] = data_dict.get('subscribers', 0)
+        
+        # ✅ I열 (동영상): 비어있을 때만 업데이트
+        if not existing_video_count:
+            row_data_update[COL_VIDEO_COUNT - 1] = data_dict.get('video_count', 0)
+            print(f"  📊 I열 동영상: {data_dict.get('video_count', 0)}개 저장")
+        else:
+            row_data_update[COL_VIDEO_COUNT - 1] = existing_video_count
+            print(f"  ⏭️  I열 동영상: 기존값 유지 ({existing_video_count})")
+        
+        # ✅ J열 (조회수): 비어있을 때만 업데이트
+        if not existing_total_views:
+            row_data_update[COL_TOTAL_VIEWS - 1] = data_dict.get('total_views', 0)
+            print(f"  📊 J열 조회수: {data_dict.get('total_views', 0):,}회 저장")
+        else:
+            row_data_update[COL_TOTAL_VIEWS - 1] = existing_total_views
+            print(f"  ⏭️  J열 조회수: 기존값 유지 ({existing_total_views})")
+        
+        row_data_update[COL_FIRST_UPLOAD - 1] = data_dict.get('first_upload', '')
+        row_data_update[COL_LATEST_UPLOAD - 1] = data_dict.get('latest_upload', '')
+        row_data_update[COL_COLLECT_DATE - 1] = data_dict.get('collect_date', '')
+        row_data_update[COL_VIEWS_5_TOTAL - 1] = data_dict.get('views_5', 0)
+        row_data_update[COL_VIEWS_10_TOTAL - 1] = data_dict.get('views_10', 0)
+        row_data_update[COL_VIEWS_20_TOTAL - 1] = data_dict.get('views_20', 0)
+        row_data_update[COL_VIEWS_30_TOTAL - 1] = data_dict.get('views_30', 0)
+        row_data_update[COL_OPERATION_DAYS - 1] = data_dict.get('operation_days', 0)
+        row_data_update[COL_COUNT_5D - 1] = data_dict.get('count_5d', 0)
+        row_data_update[COL_COUNT_10D - 1] = data_dict.get('count_10d', 0)
+        row_data_update[COL_CHANNEL_ID - 1] = data_dict.get('channel_id', '')
+        row_data_update[COL_VIEWS_5D - 1] = data_dict.get('views_5d', 0)
+        row_data_update[COL_VIEWS_10D - 1] = data_dict.get('views_10d', 0)
+        row_data_update[COL_VIEWS_15D - 1] = data_dict.get('views_15d', 0)
+        row_data_update[COL_YT_CATEGORY - 1] = data_dict.get('yt_category', '미분류')
 
         video_links = data_dict.get('video_links', [''] * 5)
         for i, col_idx in enumerate(COL_VIDEO_LINKS):
-            row_data[col_idx - 1] = video_links[i]
+            row_data_update[col_idx - 1] = video_links[i]
 
         for col in MANUAL_INPUT_COLUMNS:
-            row_data[col - 1] = manual_values.get(col, '')
+            row_data_update[col - 1] = manual_values.get(col, '')
 
         range_str = f'A{row_num}:AG{row_num}'
-        worksheet.update(range_str, [row_data])
+        worksheet.update(range_str, [row_data_update])
 
-        print(f"✅ Row {row_num} 배치 업데이트 완료 (B열 URL 보존)")
+        print(f"✅ Row {row_num} 배치 업데이트 완료 (B열 URL 보존, I/J/K 선택적 업데이트)")
         return True
 
     except Exception as e:
@@ -863,7 +1012,7 @@ def update_row_batch(worksheet, row_num, data_dict, manual_values):
         return False
 
 # ========================================
-# 11. 메인 실행
+# 12. 메인 실행
 # ========================================
 def main():
     """메인 실행 함수"""
@@ -949,7 +1098,8 @@ def main():
                     fail_count += 1
                     continue
 
-                if update_row_batch(worksheet, row_num, data, manual_values):
+                # ✅ row_data 전달 (기존값 확인용)
+                if update_row_batch(worksheet, row_num, data, manual_values, row_data):
                     success_count += 1
                     print(f"✅ Row {row_num} 완료!")
                 else:
@@ -967,6 +1117,7 @@ def main():
                 print(f"❌ Row {row_num} 처리 중 오류: {e}")
                 traceback.print_exc()
                 fail_count += 1
+                time.sleep(5)  # 에러 후 5초 대기
                 continue
 
         elapsed_time = time.time() - start_time
@@ -988,7 +1139,7 @@ def main():
         traceback.print_exc()
 
 # ========================================
-# 12. 실행
+# 13. 실행
 # ========================================
 if __name__ == '__main__':
     main()
