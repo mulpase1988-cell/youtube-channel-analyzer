@@ -1,6 +1,6 @@
 # ========================================
 # YouTube 채널 분석기 v2 - GitHub Actions 버전
-# RSS + YouTube API 하이브리드 방식 + Shorts 채널 + 재시도 로직 + 배치 업데이트 (20행)
+# RSS + YouTube API 하이브리드 방식 + Shorts 채널 + 재시도 로직 + 배치 업데이트 (20행) + 배치 읽기
 # ========================================
 
 # ========================================
@@ -1001,7 +1001,7 @@ def build_cell_list(row_num, data_dict, manual_values, row_data):
 def main():
     """메인 실행 함수"""
     print("=" * 60)
-    print("📂 YouTube 채널 분석기 v2 - GitHub Actions 버전 (배치 20행)")
+    print("📂 YouTube 채널 분석기 v2 - GitHub Actions 버전 (배치 20행 + 배치 읽기)")
     print("=" * 60)
 
     try:
@@ -1045,6 +1045,11 @@ def main():
         print(f"📌 총 {end_row - start_row + 1}개 행 처리 예정")
         print(f"📦 배치 크기: {BATCH_SIZE}행씩 처리\n")
 
+        # ✅ 한번에 모든 데이터 읽기 (읽기 요청 1회로 제한)
+        print("📥 시트 데이터 일괄 로드 중...")
+        all_sheet_data = worksheet.get_all_values()
+        print(f"✅ {len(all_sheet_data)}행 데이터 로드 완료 (읽기 요청: 1회)\n")
+
         print("=" * 60)
         print("🚀 채널 분석 시작")
         print("=" * 60)
@@ -1063,7 +1068,14 @@ def main():
             print(f"{'='*60}")
 
             try:
-                row_data = worksheet.row_values(row_num)
+                # ✅ 시트에서 읽기 대신 메모리 데이터 사용
+                row_idx = row_num - 1
+                if row_idx >= len(all_sheet_data):
+                    print(f"⏭️  Row {row_num}: 데이터 없음")
+                    continue
+                
+                row_data = all_sheet_data[row_idx]
+                
                 if len(row_data) < 3:
                     print(f"⏭️  Row {row_num}: 데이터 부족")
                     continue
@@ -1093,7 +1105,7 @@ def main():
                 batch_rows_count += 1
                 success_count += 1
                 
-                print(f"✅ Row {row_num} 데이터 준비 완료 ({len(cells)}개 셀)")
+                print(f"✅ Row {row_num} 준비 완료 ({len(cells)}개 셀)")
 
                 # ✅ 20행마다 배치 업데이트
                 if batch_rows_count >= BATCH_SIZE or row_num == end_row:
