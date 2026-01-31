@@ -1,5 +1,4 @@
-name: Step 1 - Extract Channel IDs
-
+name: 테스트컨피그
 on:
   workflow_dispatch:
     inputs:
