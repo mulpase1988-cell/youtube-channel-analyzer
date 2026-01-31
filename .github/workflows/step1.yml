@@ -1,12 +1,11 @@
-name: Step 1 - Extract Channel IDs
-
+name: Step 1 
 on:
   workflow_dispatch:
     inputs:
       range:
-        description: 'Processing range (e.g., 1,101 or 1-101)'
+        description: 'Processing range (e.g., 1-101 or 1-10)'
         required: false
-        default: '1,101'
+        default: '1-101'
         type: string
   schedule:
     - cron: '0 9 * * *'
@@ -35,7 +34,7 @@ jobs:
       - name: Set RANGE environment variable
         run: |
           if [ -z "${{ github.event.inputs.range }}" ]; then
-            echo "RANGE=1,101" >> $GITHUB_ENV
+            echo "RANGE=1-101" >> $GITHUB_ENV
           else
             echo "RANGE=${{ github.event.inputs.range }}" >> $GITHUB_ENV
           fi
