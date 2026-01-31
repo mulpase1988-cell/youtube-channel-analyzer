@@ -1,4 +1,4 @@
-name: Step 1 - Extract Channel IDs
+name: Step 1 - Extract
 
 on:
   workflow_dispatch:
