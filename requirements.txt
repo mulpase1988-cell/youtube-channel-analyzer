@@ -1,5 +1,15 @@
+# Google Sheets API
 gspread==5.12.0
-oauth2client==4.1.3
+google-auth==2.26.2
+google-auth-oauthlib==1.2.0
+google-auth-httplib2==0.2.0
 google-api-python-client==2.108.0
+
+# 기존 라이브러리 유지
+oauth2client==4.1.3
 feedparser==6.0.10
 python-dateutil==2.8.2
+
+# Step 1에 추가로 필요한 라이브러리
+requests==2.31.0
+urllib3==2.1.0
