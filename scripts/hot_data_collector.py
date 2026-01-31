@@ -64,8 +64,10 @@ def run_final_collector():
         print("🔑 API 키 로드 중...")
         api_sheet = spreadsheet.worksheet('API_키_관리')
         api_data = api_sheet.get_all_values()[3:]
-        active_keys = [row[2] for row in api_data if len(row) > 3 and row[3].strip().upper() == 'ACTIVE']
+        # C열에 API 키가 있으면 모두 사용
+        active_keys = [row[2].strip() for row in api_data if len(row) > 2 and row[2].strip().startswith('AIza')]
         print(f"✅ 활성 API 키 {len(active_keys)}개 로드\n")
+
         
         if not active_keys:
             print("❌ 활성화된 API 키가 없습니다!")
