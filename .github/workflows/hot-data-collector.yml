@@ -1,0 +1,36 @@
+name: 핫데이터 수집기
+
+on:
+  schedule:
+    - cron: '0 */6 * * *'  # 6시간마다 실행 (하루 4회)
+  workflow_dispatch:       # 수동 실행 가능
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: 📥 코드 체크아웃
+        uses: actions/checkout@v3
+
+      - name: 🐍 Python 설치
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: 📦 패키지 설치
+        run: |
+          pip install requests gspread google-auth
+
+      - name: 🔥 핫데이터 수집 실행
+        env:
+          GOOGLE_SERVICE_ACCOUNT: ${{ secrets.GOOGLE_SERVICE_ACCOUNT }}
+          SHEET_NAME: ${{ secrets.SHEET_NAME }}
+        run: |
+          python scripts/hot_data_collector.py
+
+      - name: 📊 완료 알림
+        if: always()
+        run: |
+          echo "🎉 핫데이터 수집 완료!"
