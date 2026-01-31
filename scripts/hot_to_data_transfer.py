@@ -1,5 +1,5 @@
 # ========================================
-# 핫데이터 → 데이터2 이전 - GitHub Actions 버전
+# 핫데이터 → 데이터 이전 - GitHub Actions 버전
 # ========================================
 
 import gspread
@@ -25,12 +25,12 @@ SHEET_NAME = os.environ.get('SHEET_NAME', '유튜브보물창고_테스트')
 # ========================================
 # 메인 이전 함수
 # ========================================
-def transfer_to_data2_no_cat1():
-    """글로벌_핫데이터에서 새 채널을 데이터2로 이전"""
+def transfer_to_data_no_cat1():
+    """글로벌_핫데이터에서 새 채널을 데이터로 이전"""
     print("=" * 60)
-    print("🔄 핫데이터 → 데이터2 이전")
+    print("🔄 핫데이터 → 데이터 이전")
     print("=" * 60)
-    print(f"📊 '글로벌_핫데이터' → '데이터2' 이전을 시작합니다.")
+    print(f"📊 '글로벌_핫데이터' → '데이터' 이전을 시작합니다.")
     print("📝 분류1은 비워두고, YT카테고리에 입력합니다.\n")
     
     try:
@@ -48,30 +48,30 @@ def transfer_to_data2_no_cat1():
         # 2. 워크시트 로드
         print("📂 워크시트 로드 중...")
         ws_hot = spreadsheet.worksheet('글로벌_핫데이터')
-        ws_data2 = spreadsheet.worksheet('데이터2')
+        ws_data = spreadsheet.worksheet('데이터')
         print("✅ '글로벌_핫데이터' 로드 완료")
-        print("✅ '데이터2' 로드 완료\n")
+        print("✅ '데이터' 로드 완료\n")
 
         # 3. 데이터 및 헤더 로드
         print("🔍 기존 데이터 분석 중...")
         hot_data = ws_hot.get_all_records()
-        data2_all = ws_data2.get_all_values()
-        data2_header = data2_all[0]
+        data_all = ws_data.get_all_values()
+        data_header = data_all[0]
         
         print(f"📊 글로벌_핫데이터: {len(hot_data)}개 행")
-        print(f"📊 데이터2 기존: {len(data2_all) - 1}개 행\n")
+        print(f"📊 데이터 기존: {len(data_all) - 1}개 행\n")
         
         # 'channel_id ' 컬럼 인덱스 확인 (24번째 컬럼, 인덱스 23)
         try:
-            cid_idx = data2_header.index('channel_id ')
+            cid_idx = data_header.index('channel_id ')
             print(f"✅ channel_id 컬럼 찾음: {cid_idx + 1}번째 컬럼\n")
         except ValueError:
-            print("❌ '데이터2' 시트에서 'channel_id ' 컬럼명을 찾을 수 없습니다.")
+            print("❌ '데이터' 시트에서 'channel_id ' 컬럼명을 찾을 수 없습니다.")
             print("💡 컬럼명을 확인하세요. 공백이 포함되어 있을 수 있습니다.\n")
             return
 
-        # 기존 데이터2에 있는 채널 ID 추출
-        existing_cids = set([row[cid_idx] for row in data2_all[1:] if len(row) > cid_idx and row[cid_idx]])
+        # 기존 데이터에 있는 채널 ID 추출
+        existing_cids = set([row[cid_idx] for row in data_all[1:] if len(row) > cid_idx and row[cid_idx]])
         print(f"🔍 기존 채널 ID: {len(existing_cids)}개\n")
         
         new_rows = []
@@ -87,7 +87,7 @@ def transfer_to_data2_no_cat1():
             
             # 중복 검사
             if c_id and c_id not in existing_cids and c_id not in added_this_session:
-                # 데이터2의 33개 컬럼 구조 생성 (A~AG)
+                # 데이터의 33개 컬럼 구조 생성 (A~AG)
                 new_entry = [""] * 33
                 
                 new_entry[0] = row.get('채널명', '')                              # A: 채널명
@@ -117,11 +117,11 @@ def transfer_to_data2_no_cat1():
 
         # 5. 결과 업데이트
         print("\n" + "=" * 60)
-        print("💾 데이터2에 저장 중...")
+        print("💾 데이터에 저장 중...")
         print("=" * 60)
         
         if new_rows:
-            ws_data2.append_rows(new_rows, value_input_option='USER_ENTERED')
+            ws_data.append_rows(new_rows, value_input_option='USER_ENTERED')
             
             print("\n" + "=" * 60)
             print("✅ 이전 완료!")
@@ -144,7 +144,7 @@ def transfer_to_data2_no_cat1():
             print("\n" + "=" * 60)
             print("ℹ️  추가할 새로운 채널이 없습니다.")
             print("=" * 60)
-            print("💡 모든 채널이 이미 데이터2에 존재합니다.")
+            print("💡 모든 채널이 이미 데이터에 존재합니다.")
 
     except Exception as e:
         print(f"\n❌ 오류 발생: {e}")
@@ -155,4 +155,4 @@ def transfer_to_data2_no_cat1():
 # 실행
 # ========================================
 if __name__ == '__main__':
-    transfer_to_data2_no_cat1()
+    transfer_to_data_no_cat1()
