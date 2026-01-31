@@ -1,6 +1,6 @@
 # ========================================
 # YouTube 채널 분석기 v2 - GitHub Actions 버전
-# RSS + YouTube API 하이브리드 방식 + Shorts 채널 + 재시도 로직 + 선택적 업데이트
+# RSS + YouTube API 하이브리드 방식 + Shorts 채널 + 재시도 로직 + 배치 업데이트 (20행)
 # ========================================
 
 # ========================================
@@ -41,6 +41,9 @@ with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.json') as f:
 SHEET_NAME = os.environ.get('SHEET_NAME', '유튜브보물창고_테스트')
 API_TAB_NAME = os.environ.get('API_TAB_NAME', 'API_키_관리')
 DATA_TAB_NAME = os.environ.get('DATA_TAB_NAME', '데이터2')
+
+# 배치 업데이트 설정
+BATCH_SIZE = 20  # 20행씩 배치 처리
 
 # 컬럼 매핑 (A=1, B=2, ...)
 COL_CHANNEL_NAME = 1      # A: 채널명
@@ -934,82 +937,63 @@ def preserve_manual_columns(worksheet, row_num):
         return {col: '' for col in MANUAL_INPUT_COLUMNS}
 
 # ========================================
-# 11. 배치 업데이트 (선택적)
+# 11. 배치 업데이트 (20행씩)
 # ========================================
-def update_row_batch(worksheet, row_num, data_dict, manual_values, row_data):
-    """33개 셀을 한 번에 업데이트 (B열 URL은 보존, I/J/K는 비어있을 때만 업데이트)"""
+def build_cell_list(row_num, data_dict, manual_values, row_data):
+    """행 데이터를 셀 리스트로 변환"""
+    cell_list = []
+    
     try:
-        existing_url = worksheet.cell(row_num, COL_URL).value or ''
+        existing_url = row_data[COL_URL - 1] if len(row_data) >= COL_URL else ''
+        existing_video_count = str(row_data[COL_VIDEO_COUNT - 1]).strip() if len(row_data) >= COL_VIDEO_COUNT else ''
+        existing_total_views = str(row_data[COL_TOTAL_VIEWS - 1]).strip() if len(row_data) >= COL_TOTAL_VIEWS else ''
         
-        # ✅ 기존 값 확인 (I, J, K)
-        existing_video_count = ''
-        existing_total_views = ''
-        existing_first_upload = ''
+        # 각 컬럼별로 셀 추가 (값이 있을 때만)
+        columns_data = [
+            (COL_CHANNEL_NAME, data_dict.get('channel_name', '')),
+            (COL_URL, existing_url),  # URL은 유지
+            (COL_HANDLE, data_dict.get('handle', '')),
+            (COL_COUNTRY, data_dict.get('country', '')),
+            (COL_SUBSCRIBERS, data_dict.get('subscribers', 0)),
+            (COL_VIDEO_COUNT, data_dict.get('video_count', 0) if not existing_video_count else existing_video_count),
+            (COL_TOTAL_VIEWS, data_dict.get('total_views', 0) if not existing_total_views else existing_total_views),
+            (COL_FIRST_UPLOAD, data_dict.get('first_upload', '')),
+            (COL_LATEST_UPLOAD, data_dict.get('latest_upload', '')),
+            (COL_COLLECT_DATE, data_dict.get('collect_date', '')),
+            (COL_VIEWS_5_TOTAL, data_dict.get('views_5', 0)),
+            (COL_VIEWS_10_TOTAL, data_dict.get('views_10', 0)),
+            (COL_VIEWS_20_TOTAL, data_dict.get('views_20', 0)),
+            (COL_VIEWS_30_TOTAL, data_dict.get('views_30', 0)),
+            (COL_OPERATION_DAYS, data_dict.get('operation_days', 0)),
+            (COL_COUNT_5D, data_dict.get('count_5d', 0)),
+            (COL_COUNT_10D, data_dict.get('count_10d', 0)),
+            (COL_CHANNEL_ID, data_dict.get('channel_id', '')),
+            (COL_VIEWS_5D, data_dict.get('views_5d', 0)),
+            (COL_VIEWS_10D, data_dict.get('views_10d', 0)),
+            (COL_VIEWS_15D, data_dict.get('views_15d', 0)),
+            (COL_YT_CATEGORY, data_dict.get('yt_category', '미분류')),
+        ]
         
-        if len(row_data) >= COL_VIDEO_COUNT:
-            existing_video_count = str(row_data[COL_VIDEO_COUNT - 1]).strip()
-        if len(row_data) >= COL_TOTAL_VIEWS:
-            existing_total_views = str(row_data[COL_TOTAL_VIEWS - 1]).strip()
-        if len(row_data) >= COL_FIRST_UPLOAD:
-            existing_first_upload = str(row_data[COL_FIRST_UPLOAD - 1]).strip()
+        for col_idx, value in columns_data:
+            if value or value == 0:  # 0도 포함
+                cell_list.append(gspread.Cell(row_num, col_idx, value))
         
-        row_data_update = [''] * 33
-
-        row_data_update[COL_CHANNEL_NAME - 1] = data_dict.get('channel_name', '')
-        row_data_update[COL_URL - 1] = existing_url
-        row_data_update[COL_HANDLE - 1] = data_dict.get('handle', '')
-        row_data_update[COL_COUNTRY - 1] = data_dict.get('country', '')
-        row_data_update[COL_SUBSCRIBERS - 1] = data_dict.get('subscribers', 0)
-        
-        # ✅ I열 (동영상): 비어있을 때만 업데이트
-        if not existing_video_count:
-            row_data_update[COL_VIDEO_COUNT - 1] = data_dict.get('video_count', 0)
-            print(f"  📊 I열 동영상: {data_dict.get('video_count', 0)}개 저장")
-        else:
-            row_data_update[COL_VIDEO_COUNT - 1] = existing_video_count
-            print(f"  ⏭️  I열 동영상: 기존값 유지 ({existing_video_count})")
-        
-        # ✅ J열 (조회수): 비어있을 때만 업데이트
-        if not existing_total_views:
-            row_data_update[COL_TOTAL_VIEWS - 1] = data_dict.get('total_views', 0)
-            print(f"  📊 J열 조회수: {data_dict.get('total_views', 0):,}회 저장")
-        else:
-            row_data_update[COL_TOTAL_VIEWS - 1] = existing_total_views
-            print(f"  ⏭️  J열 조회수: 기존값 유지 ({existing_total_views})")
-        
-        row_data_update[COL_FIRST_UPLOAD - 1] = data_dict.get('first_upload', '')
-        row_data_update[COL_LATEST_UPLOAD - 1] = data_dict.get('latest_upload', '')
-        row_data_update[COL_COLLECT_DATE - 1] = data_dict.get('collect_date', '')
-        row_data_update[COL_VIEWS_5_TOTAL - 1] = data_dict.get('views_5', 0)
-        row_data_update[COL_VIEWS_10_TOTAL - 1] = data_dict.get('views_10', 0)
-        row_data_update[COL_VIEWS_20_TOTAL - 1] = data_dict.get('views_20', 0)
-        row_data_update[COL_VIEWS_30_TOTAL - 1] = data_dict.get('views_30', 0)
-        row_data_update[COL_OPERATION_DAYS - 1] = data_dict.get('operation_days', 0)
-        row_data_update[COL_COUNT_5D - 1] = data_dict.get('count_5d', 0)
-        row_data_update[COL_COUNT_10D - 1] = data_dict.get('count_10d', 0)
-        row_data_update[COL_CHANNEL_ID - 1] = data_dict.get('channel_id', '')
-        row_data_update[COL_VIEWS_5D - 1] = data_dict.get('views_5d', 0)
-        row_data_update[COL_VIEWS_10D - 1] = data_dict.get('views_10d', 0)
-        row_data_update[COL_VIEWS_15D - 1] = data_dict.get('views_15d', 0)
-        row_data_update[COL_YT_CATEGORY - 1] = data_dict.get('yt_category', '미분류')
-
+        # 영상 링크 (AC~AG)
         video_links = data_dict.get('video_links', [''] * 5)
         for i, col_idx in enumerate(COL_VIDEO_LINKS):
-            row_data_update[col_idx - 1] = video_links[i]
-
-        for col in MANUAL_INPUT_COLUMNS:
-            row_data_update[col - 1] = manual_values.get(col, '')
-
-        range_str = f'A{row_num}:AG{row_num}'
-        worksheet.update(range_str, [row_data_update])
-
-        print(f"✅ Row {row_num} 배치 업데이트 완료 (B열 URL 보존, I/J/K 선택적 업데이트)")
-        return True
-
+            if video_links[i]:
+                cell_list.append(gspread.Cell(row_num, col_idx, video_links[i]))
+        
+        # 수동 입력 컬럼
+        for col, value in manual_values.items():
+            if value:
+                cell_list.append(gspread.Cell(row_num, col, value))
+        
+        return cell_list
+    
     except Exception as e:
-        print(f"❌ 배치 업데이트 실패: {e}")
-        traceback.print_exc()
-        return False
+        print(f"❌ 셀 리스트 생성 실패 (Row {row_num}): {e}")
+        return []
 
 # ========================================
 # 12. 메인 실행
@@ -1017,7 +1001,7 @@ def update_row_batch(worksheet, row_num, data_dict, manual_values, row_data):
 def main():
     """메인 실행 함수"""
     print("=" * 60)
-    print("📂 YouTube 채널 분석기 v2 - GitHub Actions 버전")
+    print("📂 YouTube 채널 분석기 v2 - GitHub Actions 버전 (배치 20행)")
     print("=" * 60)
 
     try:
@@ -1059,14 +1043,19 @@ def main():
             print(f"✅ 전체 처리: {start_row}행 ~ {end_row}행")
 
         print(f"📌 총 {end_row - start_row + 1}개 행 처리 예정")
+        print(f"📦 배치 크기: {BATCH_SIZE}행씩 처리\n")
 
-        print("\n" + "=" * 60)
+        print("=" * 60)
         print("🚀 채널 분석 시작")
         print("=" * 60)
 
         success_count = 0
         fail_count = 0
         start_time = time.time()
+        
+        # ✅ 배치 업데이트용 셀 리스트
+        batch_cells = []
+        batch_rows_count = 0
 
         for row_num in range(start_row, end_row + 1):
             print(f"\n{'='*60}")
@@ -1098,20 +1087,30 @@ def main():
                     fail_count += 1
                     continue
 
-                # ✅ row_data 전달 (기존값 확인용)
-                if update_row_batch(worksheet, row_num, data, manual_values, row_data):
-                    success_count += 1
-                    print(f"✅ Row {row_num} 완료!")
-                else:
-                    fail_count += 1
+                # ✅ 셀 리스트에 추가
+                cells = build_cell_list(row_num, data, manual_values, row_data)
+                batch_cells.extend(cells)
+                batch_rows_count += 1
+                success_count += 1
+                
+                print(f"✅ Row {row_num} 데이터 준비 완료 ({len(cells)}개 셀)")
 
-                if (row_num - start_row + 1) % 5 == 0:
-                    api_manager.sync_to_sheet()
-                    api_manager.print_status()
-                    print(f"💤 30초 대기...")
-                    time.sleep(30)
-                else:
-                    time.sleep(3)
+                # ✅ 20행마다 배치 업데이트
+                if batch_rows_count >= BATCH_SIZE or row_num == end_row:
+                    if batch_cells:
+                        print(f"\n📤 배치 업데이트 실행: {batch_rows_count}행, {len(batch_cells)}개 셀")
+                        worksheet.update_cells(batch_cells)
+                        print(f"✅ 배치 업데이트 완료!")
+                        batch_cells = []
+                        batch_rows_count = 0
+                        
+                        # API 키 동기화 (20행마다)
+                        api_manager.sync_to_sheet()
+                        api_manager.print_status()
+                        print(f"💤 2초 대기...")
+                        time.sleep(2)
+                
+                time.sleep(3)
 
             except Exception as e:
                 print(f"❌ Row {row_num} 처리 중 오류: {e}")
@@ -1119,6 +1118,12 @@ def main():
                 fail_count += 1
                 time.sleep(5)  # 에러 후 5초 대기
                 continue
+
+        # ✅ 남은 데이터 마지막 배치 업데이트
+        if batch_cells:
+            print(f"\n📤 최종 배치 업데이트: {batch_rows_count}행, {len(batch_cells)}개 셀")
+            worksheet.update_cells(batch_cells)
+            print(f"✅ 최종 배치 업데이트 완료!")
 
         elapsed_time = time.time() - start_time
         print("\n" + "=" * 60)
