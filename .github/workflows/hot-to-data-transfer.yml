@@ -1,4 +1,4 @@
-name: 핫데이터→데이터2 이전
+name: 핫데이터→데이터 이전
 
 on:
   schedule:
@@ -23,7 +23,7 @@ jobs:
         run: |
           pip install gspread google-auth
 
-      - name: 🔄 핫데이터 → 데이터2 이전
+      - name: 🔄 핫데이터 → 데이터 이전
         env:
           GOOGLE_SERVICE_ACCOUNT: ${{ secrets.GOOGLE_SERVICE_ACCOUNT }}
           SHEET_NAME: ${{ secrets.SHEET_NAME }}
@@ -33,4 +33,4 @@ jobs:
       - name: 📊 완료 알림
         if: always()
         run: |
-          echo "🎉 핫데이터 → 데이터2 이전 완료!"
+          echo "🎉 핫데이터 → 데이터 이전 완료!"
