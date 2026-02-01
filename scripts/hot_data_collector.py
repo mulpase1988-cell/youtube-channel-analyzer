@@ -1,192 +1,257 @@
-import os
-import json
-import requests
-from datetime import datetime
-from google.auth import _helpers
-from google.auth.transport.requests import Request
-from google.oauth2 import service_account
-import gspread
-
-# Turso 설정
-TURSO_URL = os.environ.get('TURSO_URL')
-TURSO_TOKEN = os.environ.get('TURSO_TOKEN')
-
-def get_turso_api_url():
-    """Turso HTTP API URL 생성"""
-    return TURSO_URL.replace('libsql://', 'https://') + '/v2/pipeline'
-
-def execute_turso_query(sql, args=None):
-    """Turso에서 쿼리 실행"""
-    headers = {
-        'Authorization': f'Bearer {TURSO_TOKEN}',
-        'Content-Type': 'application/json'
-    }
-    
-    statement = {'sql': sql}
-    if args:
-        statement['args'] = args
-    
-    payload = {
-        'requests': [{'type': 'execute', 'statement': statement}]
-    }
-    
-    response = requests.post(
-        get_turso_api_url(),
-        json=payload,
-        headers=headers
-    )
-    
-    if response.status_code != 200:
-        raise Exception(f"Turso 쿼리 실행 실패: {response.text}")
-    
-    return response.json()
-
-def load_google_service_account():
-    """DB에서 Google 서비스 계정 로드"""
-    print("🔄 DB에서 Google 서비스 계정 로드 중...")
-    
-    sql = "SELECT secret_value FROM secrets_management WHERE secret_key = 'google_service_account' AND is_active = 'Y'"
+def update_api_key_usage(turso_url, turso_token, api_key, quota_used, has_error=False):
+    """
+    API 키 사용 후 해당 정보 업데이트
+    - used_quota: 사용한 할당량
+    - remaining_quota: 남은 할당량
+    - usage_percentage: 사용률
+    - last_used: 마지막 사용 시간
+    - error_count: 에러 발생 시 +1
+    - test_datetime: 마지막 테스트 시간
+    """
+    print(f"🔄 API 키 사용 정보 업데이트 중...")
     
     try:
-        result = execute_turso_query(sql)
+        current_time = datetime.now().isoformat()
         
-        # 응답 파싱
+        # Step 1: 현재 API 키 정보 조회
+        sql_select = """
+        SELECT used_quota, total_quota 
+        FROM api_key_management 
+        WHERE api_key = ?
+        """
+        
+        result = execute_turso_query(turso_url, turso_token, sql_select, [api_key])
+        
         if result and 'results' in result and len(result['results']) > 0:
             rows = result['results'][0].get('rows', [])
-            if rows and len(rows) > 0:
-                secret_value = rows[0][0]
-                service_account_data = json.loads(secret_value)
-                print("✅ Google 서비스 계정 로드 완료")
-                return service_account_data
-        
-        print("❌ secrets_management에서 google_service_account를 찾을 수 없습니다")
-        return None
-    
-    except Exception as e:
-        print(f"❌ Google 서비스 계정 로드 실패: {str(e)}")
-        return None
-
-def load_turso_settings():
-    """DB에서 Turso 설정 로드"""
-    print("🔄 DB에서 설정 로드 중...")
-    
-    sql = "SELECT setting_key, setting_value FROM turso_settings WHERE is_active = 'Y'"
-    
-    try:
-        result = execute_turso_query(sql)
-        
-        settings = {}
-        if result and 'results' in result and len(result['results']) > 0:
-            rows = result['results'][0].get('rows', [])
-            for row in rows:
-                settings[row[0]] = row[1]
-        
-        print("✅ 설정 로드 완료")
-        return settings
-    
-    except Exception as e:
-        print(f"⚠️ 설정 로드 실패 (기본값 사용): {str(e)}")
-        return {}
-
-def load_active_api_keys(gc):
-    """Google Sheets에서 활성 API 키 로드"""
-    print("🔄 API 키 로드 중...")
-    
-    try:
-        sheet_name = '유튜브보물창고_테스트'
-        sheet = gc.open(sheet_name)
-        
-        worksheet = sheet.worksheet('API_키_관리')
-        all_values = worksheet.get_all_values()
-        
-        api_keys = []
-        for row in all_values[1:]:  # 헤더 제외
-            if len(row) >= 5:  # 충분한 컬럼 확인
-                api_key = row[2]  # 3번째 컬럼: API 키
-                status = row[3]   # 4번째 컬럼: 상태
-                is_active = row[14] if len(row) > 14 else 'FALSE'  # 마지막 컬럼: 활성화
+            if rows:
+                current_used = rows[0][0] or 0
+                total_quota = rows[0][1] or 10000
                 
-                if api_key.startswith('AIza') and is_active.upper() == 'TRUE':
-                    api_keys.append(api_key)
-        
-        if api_keys:
-            print(f"✅ {len(api_keys)}개의 활성 API 키 로드 완료")
-            return api_keys
-        else:
-            print("❌ 활성 API 키가 없습니다")
-            return []
+                # Step 2: 새로운 할당량 계산
+                new_used_quota = current_used + quota_used
+                new_remaining_quota = total_quota - new_used_quota
+                new_usage_percentage = (new_used_quota / total_quota * 100) if total_quota > 0 else 0
+                
+                # Step 3: 에러 횟수 업데이트
+                error_increment = 1 if has_error else 0
+                
+                # Step 4: DB 업데이트
+                sql_update = """
+                UPDATE api_key_management 
+                SET 
+                    used_quota = ?,
+                    remaining_quota = ?,
+                    usage_percentage = ?,
+                    last_used = ?,
+                    error_count = error_count + ?,
+                    test_datetime = ?,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE api_key = ?
+                """
+                
+                execute_turso_query(
+                    turso_url, turso_token, sql_update,
+                    [
+                        new_used_quota,
+                        new_remaining_quota,
+                        round(new_usage_percentage, 2),
+                        current_time,
+                        error_increment,
+                        current_time,
+                        api_key
+                    ]
+                )
+                
+                print(f"✅ API 키 정보 업데이트 완료")
+                print(f"   - 사용 할당량: {current_used} → {new_used_quota}")
+                print(f"   - 남은 할당량: {total_quota - current_used} → {new_remaining_quota}")
+                print(f"   - 사용률: {(current_used/total_quota*100):.1f}% → {new_usage_percentage:.1f}%")
+                if has_error:
+                    print(f"   - 에러 발생 (+1)")
     
     except Exception as e:
-        print(f"❌ API 키 로드 실패: {str(e)}")
-        return []
+        print(f"❌ API 키 정보 업데이트 실패: {str(e)}")
 
-def load_countries_to_collect(gc):
-    """Google Sheets에서 수집 대상 국가 로드"""
-    print("🔄 수집 대상 국가 로드 중...")
+def call_youtube_api(api_key, country_code, category_id):
+    """
+    YouTube API 호출
+    성공 시 데이터와 사용한 할당량 반환
+    실패 시 None과 에러 정보 반환
+    """
+    import googleapiclient.discovery
     
     try:
-        sheet_name = '유튜브보물창고_테스트'
-        sheet = gc.open(sheet_name)
+        youtube = googleapiclient.discovery.build(
+            'youtube', 'v3', developerKey=api_key
+        )
         
-        worksheet = sheet.worksheet('설정_국가')
-        all_values = worksheet.get_all_values()
+        # YouTube API 호출 (할당량 1 사용)
+        request = youtube.videos().list(
+            chart='mostPopular',
+            regionCode=country_code,
+            videoCategoryId=category_id,
+            part='snippet,statistics,contentDetails',
+            maxResults=50
+        )
         
-        countries = []
-        for row in all_values[1:]:  # 헤더 제외
-            if len(row) >= 3 and row[2].upper() == 'Y':  # 수집여부가 Y
-                countries.append({
-                    'name': row[0],   # 국가명
-                    'code': row[1]    # 국가코드
-                })
+        response = request.execute()
         
-        print(f"✅ {len(countries)}개 국가 로드 완료")
-        return countries
+        # 할당량 1 소비됨 (YouTube API v3는 기본 100 할당량, videos.list는 1 소비)
+        quota_used = 1
+        
+        return response, quota_used, False
     
     except Exception as e:
-        print(f"❌ 국가 로드 실패: {str(e)}")
-        return []
+        print(f"❌ YouTube API 호출 실패: {str(e)}")
+        # 에러 발생 시 할당량 1 소비됨 (실패해도 할당량 차감)
+        return None, 1, True
 
-def load_categories_to_collect(gc):
-    """Google Sheets에서 수집 대상 카테고리 로드"""
-    print("🔄 수집 대상 카테고리 로드 중...")
+def collect_hot_data(turso_url, turso_token, api_keys, countries, categories):
+    """
+    YouTube API를 사용해서 핫데이터 수집
+    각 API 키 호출 후 정보 업데이트
+    """
+    print("\n🎬 YouTube API에서 데이터 수집 시작")
+    print(f"   총 조합 수: {len(api_keys) * len(countries) * len(categories)}")
     
-    try:
-        sheet_name = '유튜브보물창고_테스트'
-        sheet = gc.open(sheet_name)
-        
-        worksheet = sheet.worksheet('설정_카테고리')
-        all_values = worksheet.get_all_values()
-        
-        categories = []
-        for row in all_values[1:]:  # 헤더 제외
-            if len(row) >= 3 and row[2].upper() == 'Y':  # 수집여부가 Y
-                categories.append({
-                    'name': row[0],   # 카테고리명
-                    'id': row[1]      # 카테고리ID
-                })
-        
-        print(f"✅ {len(categories)}개 카테고리 로드 완료")
-        return categories
+    collected_data = []
+    api_key_index = 0
+    total_calls = 0
+    total_errors = 0
     
-    except Exception as e:
-        print(f"❌ 카테고리 로드 실패: {str(e)}")
-        return []
+    for country in countries:
+        for category in categories:
+            try:
+                # API 키 순환 (할당량 부족 시 다음 키로)
+                api_key_info = api_keys[api_key_index % len(api_keys)]
+                current_api_key = api_key_info['key']
+                
+                print(f"\n🔄 수집 중... [{total_calls + 1}/{len(api_keys) * len(countries) * len(categories)}]")
+                print(f"   국가: {country['name']} ({country['code']})")
+                print(f"   카테고리: {category['name']} (ID: {category['id']})")
+                print(f"   API 키: {api_key_info['name']}")
+                
+                # Step 1: YouTube API 호출
+                response, quota_used, has_error = call_youtube_api(
+                    current_api_key,
+                    country['code'],
+                    category['id']
+                )
+                
+                # Step 2: API 키 사용 정보 업데이트
+                update_api_key_usage(
+                    turso_url, turso_token,
+                    current_api_key,
+                    quota_used,
+                    has_error
+                )
+                
+                total_calls += 1
+                if has_error:
+                    total_errors += 1
+                
+                # Step 3: 응답 처리
+                if response and 'items' in response:
+                    videos = response['items']
+                    print(f"   ✅ {len(videos)}개 영상 수집")
+                    
+                    for idx, video in enumerate(videos, 1):
+                        try:
+                            # 영상 데이터 파싱
+                            video_data = parse_video_data(
+                                video, country, category
+                            )
+                            collected_data.append(video_data)
+                        except Exception as e:
+                            print(f"      ⚠️ 영상 파싱 실패: {str(e)}")
+                else:
+                    print(f"   ⚠️ 영상 데이터 없음")
+                
+                # 다음 API 키로 순환
+                api_key_index += 1
+            
+            except Exception as e:
+                print(f"❌ 수집 실패: {str(e)}")
+                total_errors += 1
+                continue
+    
+    print(f"\n📊 수집 완료")
+    print(f"   - 총 호출: {total_calls}")
+    print(f"   - 성공: {total_calls - total_errors}")
+    print(f"   - 실패: {total_errors}")
+    print(f"   - 수집된 영상: {len(collected_data)}")
+    
+    return collected_data
 
-def clear_hot_data_table():
-    """기존 global_hot_data 삭제"""
-    print("🔄 기존 데이터 삭제 중...")
+def parse_video_data(video, country, category):
+    """
+    YouTube API 응답에서 필요한 데이터 추출
+    global_hot_data 테이블에 맞춘 형식으로 변환
+    """
+    snippet = video.get('snippet', {})
+    statistics = video.get('statistics', {})
+    content_details = video.get('contentDetails', {})
     
-    try:
-        sql = "DELETE FROM global_hot_data"
-        execute_turso_query(sql)
-        print("✅ 기존 데이터 삭제 완료")
+    # 동영상 길이 파싱 (ISO 8601 형식)
+    duration_str = content_details.get('duration', 'PT0S')
+    detail_type = parse_duration(duration_str)
     
-    except Exception as e:
-        print(f"⚠️ 데이터 삭제 실패: {str(e)}")
+    # 태그 추출 (최대 10개)
+    tags = snippet.get('tags', [])
+    tags_str = ','.join(tags[:10])
+    
+    # 데이터 구성
+    video_data = {
+        'collect_datetime': datetime.now().isoformat(),
+        'country': country['name'],
+        'category': category['name'],
+        'detail_type': detail_type,
+        'ranking': 0,  # 나중에 설정
+        'thumbnail': snippet.get('thumbnails', {}).get('default', {}).get('url', ''),
+        'video_title': snippet.get('title', ''),
+        'view_count': int(statistics.get('viewCount', 0)),
+        'channel_name': snippet.get('channelTitle', ''),
+        'handle': '',  # 나중에 채널 정보에서 추출
+        'subscriber_count': 0,  # 나중에 채널 정보에서 추출
+        'tags': tags_str,
+        'video_link': f"https://www.youtube.com/watch?v={video['id']}",
+        'channel_id': snippet.get('channelId', ''),
+        'thumbnail_url': snippet.get('thumbnails', {}).get('high', {}).get('url', '')
+    }
+    
+    return video_data
 
-def insert_hot_data(data_rows):
-    """hot_data를 global_hot_data 테이블에 삽입"""
-    print(f"🔄 {len(data_rows)}개 행을 DB에 삽입 중...")
+def parse_duration(duration_str):
+    """
+    ISO 8601 형식의 duration을 파싱해서 영상 타입 결정
+    - Shorts: 60초 이하
+    - Mid-form: 120초 이하
+    - Long-form: 120초 초과
+    """
+    import re
+    
+    pattern = r'PT(\d+H)?(\d+M)?(\d+S)?'
+    match = re.match(pattern, duration_str)
+    
+    hours = int(match.group(1)[:-1]) if match.group(1) else 0
+    minutes = int(match.group(2)[:-1]) if match.group(2) else 0
+    seconds = int(match.group(3)[:-1]) if match.group(3) else 0
+    
+    total_seconds = hours * 3600 + minutes * 60 + seconds
+    
+    if total_seconds <= 60:
+        return 'Shorts'
+    elif total_seconds <= 120:
+        return 'Mid-form'
+    else:
+        return 'Long-form'
+
+def insert_hot_data_to_db(turso_url, turso_token, data_rows):
+    """
+    수집한 데이터를 global_hot_data 테이블에 삽입
+    """
+    print(f"\n💾 {len(data_rows)}개 영상을 DB에 삽입 중...")
     
     inserted_count = 0
     
@@ -194,119 +259,65 @@ def insert_hot_data(data_rows):
         try:
             sql = """
             INSERT INTO global_hot_data 
-            (collect_datetime, country, category, detail_type, ranking, thumbnail, 
-             video_title, view_count, channel_name, handle, subscriber_count, tags, 
-             video_link, channel_id, thumbnail_url)
+            (collect_datetime, country, category, detail_type, ranking, 
+             thumbnail, video_title, view_count, channel_name, handle, 
+             subscriber_count, tags, video_link, channel_id, thumbnail_url)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """
             
-            args = [
-                row[0],   # collect_datetime
-                row[1],   # country
-                row[2],   # category
-                row[3],   # detail_type
-                row[4],   # ranking
-                row[5],   # thumbnail
-                row[6],   # video_title
-                row[7],   # view_count
-                row[8],   # channel_name
-                row[9],   # handle
-                row[10],  # subscriber_count
-                row[11],  # tags
-                row[12],  # video_link
-                row[13],  # channel_id
-                row[14]   # thumbnail_url
-            ]
-            
-            execute_turso_query(sql, args)
+            execute_turso_query(
+                turso_url, turso_token, sql,
+                [
+                    row['collect_datetime'],
+                    row['country'],
+                    row['category'],
+                    row['detail_type'],
+                    row['ranking'],
+                    row['thumbnail'],
+                    row['video_title'],
+                    row['view_count'],
+                    row['channel_name'],
+                    row['handle'],
+                    row['subscriber_count'],
+                    row['tags'],
+                    row['video_link'],
+                    row['channel_id'],
+                    row['thumbnail_url']
+                ]
+            )
             inserted_count += 1
         
         except Exception as e:
             print(f"⚠️ 행 삽입 실패: {str(e)}")
     
-    print(f"✅ {inserted_count}/{len(data_rows)}개 행 삽입 완료")
+    print(f"✅ {inserted_count}/{len(data_rows)}개 영상 삽입 완료")
     return inserted_count
-
-def update_last_collection_time():
-    """마지막 수집 시간 업데이트"""
-    try:
-        current_time = datetime.now().isoformat()
-        sql = """
-        UPDATE turso_settings 
-        SET setting_value = ?, last_updated = CURRENT_TIMESTAMP
-        WHERE setting_key = 'last_collection_time'
-        """
-        
-        execute_turso_query(sql, [current_time])
-        print(f"✅ 마지막 수집 시간 업데이트: {current_time}")
-    
-    except Exception as e:
-        print(f"⚠️ 마지막 수집 시간 업데이트 실패: {str(e)}")
 
 def main():
     """메인 함수"""
-    print("="*60)
+    print("="*70)
     print("🎬 글로벌 핫데이터 수집기 시작")
-    print("="*60)
+    print("="*70)
     
-    # Step 1: Turso 연결 확인
-    if not TURSO_URL or not TURSO_TOKEN:
-        print("❌ 환경변수 TURSO_URL 또는 TURSO_TOKEN이 설정되지 않았습니다")
-        return
+    # ... (기존 Step 1-5 코드)
     
-    print(f"✅ Turso URL: {TURSO_URL[:50]}...")
+    # Step 7: YouTube API 데이터 수집 및 API 키 정보 업데이트
+    print("\n🎯 Step 7: YouTube API 데이터 수집")
+    collected_data = collect_hot_data(
+        final_turso_url, final_turso_token,
+        api_keys, countries, categories
+    )
     
-    # Step 2: DB에서 Google 서비스 계정 로드
-    service_account_data = load_google_service_account()
-    if not service_account_data:
-        print("❌ Google 서비스 계정 로드 실패. 프로그램 종료")
-        return
-    
-    # Step 3: 서비스 계정으로 인증
-    try:
-        credentials = service_account.Credentials.from_service_account_info(
-            service_account_data,
-            scopes=['https://www.googleapis.com/auth/spreadsheets']
+    # Step 8: 수집한 데이터를 DB에 삽입
+    if collected_data:
+        inserted_count = insert_hot_data_to_db(
+            final_turso_url, final_turso_token,
+            collected_data
         )
-        gc = gspread.authorize(credentials)
-        print("✅ Google Sheets 인증 성공")
     
-    except Exception as e:
-        print(f"❌ Google Sheets 인증 실패: {str(e)}")
-        return
-    
-    # Step 4: 설정 로드
-    turso_settings = load_turso_settings()
-    
-    # Step 5: API 키, 국가, 카테고리 로드
-    api_keys = load_active_api_keys(gc)
-    countries = load_countries_to_collect(gc)
-    categories = load_categories_to_collect(gc)
-    
-    if not api_keys or not countries or not categories:
-        print("❌ 필수 설정이 부족합니다. 프로그램 종료")
-        return
-    
-    # Step 6: 기존 데이터 삭제
-    clear_hot_data_table()
-    
-    # Step 7: 데이터 수집 (여기에 YouTube API 호출 로직 추가)
-    print("\n🔄 YouTube API에서 데이터 수집 중...")
-    print(f"   - API 키: {len(api_keys)}개")
-    print(f"   - 국가: {len(countries)}개")
-    print(f"   - 카테고리: {len(categories)}개")
-    print(f"   - 조합 수: {len(api_keys) * len(countries) * len(categories)}")
-    
-    # TODO: YouTube API 호출 로직 구현
-    # data_rows = collect_from_youtube_api(api_keys, countries, categories)
-    # insert_hot_data(data_rows)
-    
-    # Step 8: 마지막 수집 시간 업데이트
-    update_last_collection_time()
-    
-    print("\n" + "="*60)
+    print("\n" + "="*70)
     print("✅ 글로벌 핫데이터 수집 완료!")
-    print("="*60)
+    print("="*70)
 
 if __name__ == '__main__':
     main()
