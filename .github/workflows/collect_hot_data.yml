@@ -1,0 +1,27 @@
+name: 글로벌 핫데이터 수집
+
+on:
+  schedule:
+    - cron: '0 */6 * * *'
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Python 설정
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+      
+      - name: 의존성 설치
+        run: |
+          pip install requests gspread google-auth-oauthlib google-auth-httplib2 libsql-client
+      
+      - name: 핫데이터 수집
+        env:
+          GOOGLE_SERVICE_ACCOUNT: ${{ secrets.GOOGLE_SERVICE_ACCOUNT }}
+          TURSO_URL: ${{ secrets.TURSO_URL }}
+          TURSO_TOKEN: ${{ secrets.TURSO_TOKEN }}
+        run: python scripts/collect_hot_data.py
