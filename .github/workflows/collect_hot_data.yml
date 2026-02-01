@@ -1,8 +1,9 @@
-name: 핫데이터 수집
+name: 글로벌 핫데이터 수집
 
 on:
   schedule:
     - cron: '0 */6 * * *'
+  workflow_dispatch:  # ← 이 줄 추가 (수동 실행 가능)
 
 jobs:
   collect:
@@ -24,4 +25,4 @@ jobs:
           GOOGLE_SERVICE_ACCOUNT: ${{ secrets.GOOGLE_SERVICE_ACCOUNT }}
           TURSO_URL: ${{ secrets.TURSO_URL }}
           TURSO_TOKEN: ${{ secrets.TURSO_TOKEN }}
-        run: python scripts/hot_data_collector.py  # ← 여기 수정
+        run: python scripts/hot_data_collector.py
