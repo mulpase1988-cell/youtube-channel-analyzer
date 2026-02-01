@@ -749,17 +749,15 @@ def get_channel_data_hybrid(channel_url, api_manager, row_number, row_data, work
         print(f"  ✓ 채널: {result['channel_name']}")
         print(f"  ✓ 구독자: {result['subscribers']:,} | 영상: {result['video_count']:,} | 총조회수: {result['total_views']:,}")
 
-        # ✅ 채널 개설일 저장 (비용 0 - 이미 받은 데이터에서 추출)
         channel_created = snippet.get('publishedAt', '')
         if channel_created:
-            channel_created_date = channel_created[:10]  # YYYY-MM-DD
+            channel_created_date = channel_created[:10]
             print(f"  📅 채널 개설일: {channel_created_date}")
         else:
             channel_created_date = ''
 
         uploads_playlist_id = channel_info['contentDetails']['relatedPlaylists']['uploads']
 
-        # ✅ Shorts 전용 채널 처리
         api_videos = []
         is_shorts_only = False
 
@@ -775,7 +773,6 @@ def get_channel_data_hybrid(channel_url, api_manager, row_number, row_data, work
             playlist_response = call_playlist()
             api_manager.update_quota_used(key_name, 1)
             
-            # 일반 영상 추출
             for item in playlist_response.get('items', [])[15:30]:
                 try:
                     video_id = item['contentDetails']['videoId']
@@ -788,12 +785,10 @@ def get_channel_data_hybrid(channel_url, api_manager, row_number, row_data, work
             
         except HttpError as e:
             if e.resp.status == 404:
-                # 🎬 Shorts 전용 채널 감지
                 print(f"  ⚠️  업로드 플레이리스트 없음 → Shorts 전용 채널 감지!")
                 is_shorts_only = True
                 api_manager.update_quota_used(key_name, 1)
                 
-                # Activities API로 Shorts 조회
                 api_videos = get_shorts_channel_data(channel_id, youtube, api_manager, key_name)
             else:
                 raise
@@ -803,11 +798,10 @@ def get_channel_data_hybrid(channel_url, api_manager, row_number, row_data, work
 
         if not all_video_ids:
             print(f"  ⚠️  수집된 영상이 없습니다")
-            # ✅ 영상이 없을 때 채널 개설일 사용
             if channel_created_date and not result['first_upload']:
                 result['first_upload'] = channel_created_date
                 result['latest_upload'] = channel_created_date
-                result['operation_days'] = 0  # ✅ 수정: K열과 L열이 같으면 0
+                result['operation_days'] = 0
                 print(f"  ✅ 최초업로드 (채널 개설일): {result['first_upload']}")
                 print(f"  ✅ 최근업로드: {result['latest_upload']}")
                 print(f"  ✅ 운영기간: {result['operation_days']}일")
@@ -824,7 +818,7 @@ def get_channel_data_hybrid(channel_url, api_manager, row_number, row_data, work
         api_manager.update_quota_used(key_name, 1)
 
         view_map = {}
-        video_infos = []  # ✅ 추가: 썸네일 정보 저장
+        video_infos = []
 
         for video in videos_response.get('items', []):
             try:
@@ -841,7 +835,6 @@ def get_channel_data_hybrid(channel_url, api_manager, row_number, row_data, work
 
                 view_map[video_id] = (view_count, published_at)
                 
-                # ✅ 추가: 썸네일 정보 저장
                 try:
                     thumbnails = video['snippet'].get('thumbnails', {})
                     video_infos.append({
@@ -863,7 +856,6 @@ def get_channel_data_hybrid(channel_url, api_manager, row_number, row_data, work
             except:
                 pass
 
-        # ✅ 수정: 영상 링크 대신 썸네일 URL 저장
         result['video_links'] = get_thumbnail_urls(video_infos, max_count=5)
         print(f"  ✅ 썸네일 URL 수집 완료: {len([u for u in result['video_links'] if u])}개")
 
@@ -925,7 +917,7 @@ def get_channel_data_hybrid(channel_url, api_manager, row_number, row_data, work
             if video_id in view_map and view_map[video_id][1]:
                 dates.append(view_map[video_id][1])
 
-        # ✅ 수정: K열 - L열 기준으로 운영기간 계산
+        # ⭐⭐⭐ 수정: K열 - L열 기준으로 운영기간 계산
         if dates:
             latest_date = max(dates)      # L열: 최근 업로드
             first_date = min(dates)       # K열: 최초 업로드
@@ -938,13 +930,12 @@ def get_channel_data_hybrid(channel_url, api_manager, row_number, row_data, work
             
             print(f"  ✅ 최초업로드 (K열): {result['first_upload']}")
             print(f"  ✅ 최근업로드 (L열): {result['latest_upload']}")
-            print(f"  ✅ 운영기간 (T열): {result['operation_days']}일")
+            print(f"  🔍 DEBUG - 계산: ({latest_date.strftime('%Y-%m-%d')}) - ({first_date.strftime('%Y-%m-%d')}) = {result['operation_days']}일")
             
         elif channel_created_date:
-            # 영상 데이터가 없으면 채널 개설일 사용
             result['first_upload'] = channel_created_date
             result['latest_upload'] = channel_created_date
-            result['operation_days'] = 0  # ✅ 수정: K열과 L열이 같으면 0
+            result['operation_days'] = 0
             
             try:
                 print(f"  ✅ 최초업로드 (채널 개설일): {result['first_upload']}")
@@ -975,7 +966,6 @@ def preserve_manual_columns_batch(all_sheet_data, row_num):
         manual_values = {}
         
         for col in MANUAL_INPUT_COLUMNS:
-            # 메모리에서 읽기 (Sheets API 호출 없음!)
             cell_value = row_data[col - 1] if len(row_data) >= col else ''
             manual_values[col] = cell_value if cell_value else ''
         
@@ -996,10 +986,9 @@ def build_cell_list(row_num, data_dict, manual_values, row_data):
         existing_video_count = str(row_data[COL_VIDEO_COUNT - 1]).strip() if len(row_data) >= COL_VIDEO_COUNT else ''
         existing_total_views = str(row_data[COL_TOTAL_VIEWS - 1]).strip() if len(row_data) >= COL_TOTAL_VIEWS else ''
         
-        # 각 컬럼별로 셀 추가 (값이 있을 때만)
         columns_data = [
             (COL_CHANNEL_NAME, data_dict.get('channel_name', '')),
-            (COL_URL, existing_url),  # URL은 유지
+            (COL_URL, existing_url),
             (COL_HANDLE, data_dict.get('handle', '')),
             (COL_COUNTRY, data_dict.get('country', '')),
             (COL_SUBSCRIBERS, data_dict.get('subscribers', 0)),
@@ -1012,7 +1001,7 @@ def build_cell_list(row_num, data_dict, manual_values, row_data):
             (COL_VIEWS_10_TOTAL, data_dict.get('views_10', 0)),
             (COL_VIEWS_20_TOTAL, data_dict.get('views_20', 0)),
             (COL_VIEWS_30_TOTAL, data_dict.get('views_30', 0)),
-            (COL_OPERATION_DAYS, data_dict.get('operation_days', 0)),  # ✅ T열: 수정된 계산값
+            (COL_OPERATION_DAYS, data_dict.get('operation_days', 0)),
             (COL_COUNT_5D, data_dict.get('count_5d', 0)),
             (COL_COUNT_10D, data_dict.get('count_10d', 0)),
             (COL_CHANNEL_ID, data_dict.get('channel_id', '')),
@@ -1023,16 +1012,14 @@ def build_cell_list(row_num, data_dict, manual_values, row_data):
         ]
         
         for col_idx, value in columns_data:
-            if value or value == 0:  # 0도 포함
+            if value or value == 0:
                 cell_list.append(gspread.Cell(row_num, col_idx, value))
         
-        # ✅ 수정: 썸네일 URL 저장 (AC~AG)
         video_links = data_dict.get('video_links', [''] * 5)
         for i, col_idx in enumerate(COL_VIDEO_LINKS):
             if video_links[i]:
                 cell_list.append(gspread.Cell(row_num, col_idx, video_links[i]))
         
-        # 수동 입력 컬럼
         for col, value in manual_values.items():
             if value:
                 cell_list.append(gspread.Cell(row_num, col, value))
@@ -1095,7 +1082,6 @@ def main():
         print(f"📌 총 {end_row - start_row + 1}개 행 처리 예정")
         print(f"📦 배치 크기: {BATCH_SIZE}행씩 처리\n")
 
-        # ✅ 한번에 모든 데이터 읽기 (읽기 요청 1회로 제한)
         print("📥 시트 데이터 일괄 로드 중...")
         all_sheet_data = worksheet.get_all_values()
         print(f"✅ {len(all_sheet_data)}행 데이터 로드 완료 (읽기 요청: 1회)\n")
@@ -1108,7 +1094,6 @@ def main():
         fail_count = 0
         start_time = time.time()
         
-        # ✅ 배치 업데이트용 셀 리스트
         batch_cells = []
         batch_rows_count = 0
 
@@ -1118,7 +1103,6 @@ def main():
             print(f"{'='*60}")
 
             try:
-                # ✅ 시트에서 읽기 대신 메모리 데이터 사용
                 row_idx = row_num - 1
                 if row_idx >= len(all_sheet_data):
                     print(f"⏭️  Row {row_num}: 데이터 없음")
@@ -1140,7 +1124,6 @@ def main():
                 print(f"📌 URL: {url}")
                 print(f"📌 핸들: {handle}")
 
-                # ✅ 수정: preserve_manual_columns_batch 사용
                 manual_values = preserve_manual_columns_batch(all_sheet_data, row_num)
 
                 data = get_channel_data_hybrid(url, api_manager, row_num, row_data, worksheet)
@@ -1150,7 +1133,6 @@ def main():
                     fail_count += 1
                     continue
 
-                # ✅ 셀 리스트에 추가
                 cells = build_cell_list(row_num, data, manual_values, row_data)
                 batch_cells.extend(cells)
                 batch_rows_count += 1
@@ -1158,7 +1140,6 @@ def main():
                 
                 print(f"✅ Row {row_num} 준비 완료 ({len(cells)}개 셀)")
 
-                # ✅ 20행마다 배치 업데이트
                 if batch_rows_count >= BATCH_SIZE or row_num == end_row:
                     if batch_cells:
                         print(f"\n📤 배치 업데이트 실행: {batch_rows_count}행, {len(batch_cells)}개 셀")
@@ -1167,7 +1148,6 @@ def main():
                         batch_cells = []
                         batch_rows_count = 0
                         
-                        # API 키 동기화 (20행마다)
                         api_manager.sync_to_sheet()
                         api_manager.print_status()
                         print(f"💤 2초 대기...")
@@ -1179,10 +1159,9 @@ def main():
                 print(f"❌ Row {row_num} 처리 중 오류: {e}")
                 traceback.print_exc()
                 fail_count += 1
-                time.sleep(5)  # 에러 후 5초 대기
+                time.sleep(5)
                 continue
 
-        # ✅ 남은 데이터 마지막 배치 업데이트
         if batch_cells:
             print(f"\n📤 최종 배치 업데이트: {batch_rows_count}행, {len(batch_cells)}개 셀")
             worksheet.update_cells(batch_cells)
