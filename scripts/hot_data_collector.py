@@ -35,17 +35,28 @@ def execute_turso_query(turso_url, turso_token, sql, args=None):
     return response.json()
 
 def bootstrap_turso_credentials():
-    """Step 1: 환경변수에서 부트스트랩 Turso 정보 로드"""
+    """
+    Step 1: 환경변수에서 부트스트랩 Turso 정보 로드
+    환경변수가 없으면 사용자 입력 또는 DB에서 직접 조회
+    """
     print("🔐 Step 1: 부트스트랩 Turso 정보 로드")
     
     bootstrap_url = os.environ.get('TURSO_URL')
     bootstrap_token = os.environ.get('TURSO_TOKEN')
     
+    # 환경변수가 없으면 hardcode된 기본값 사용 (DB에 저장된 것과 동일)
+    if not bootstrap_url:
+        bootstrap_url = "libsql://youtube-analyzer-mulpase.turso.io"
+    
+    if not bootstrap_token:
+        bootstrap_token = "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.eyJpYXQiOjE3MzgyMzI1NTksImV4cCI6MTc0MzQzNjU1OSwiaWQiOiJmZDAxYjY2ZS1lZmE1LTExZWYtODAwYi1kMjkxOTk4ZmYzMzMiLCJzdWIiOiI4MzJiNGZiNC02NzVmLTExZWYtODAwMS1lZjI5YWE4YjZmOWEiLCJhcGlfa2V5IjoieWtjeFJjMWFybEdpTDhVRXJBTXVqSVA5aVdJRkh2SSIsInByaW1hcnkiOmZhbHNlLCJyYW5kb20iOiI1ZGUyMTY5YTc1MDY2N2RjIn0.9KqDyRFPVVvgqCj1hYnKEzKqVDqTnZnUvRrxVzPpMvnqIqwLlZKP_EhOuXx7rWuDw2VxQS-P_3HCp8P_IpJVCA"
+    
     if not bootstrap_url or not bootstrap_token:
-        print("❌ 환경변수 TURSO_URL 또는 TURSO_TOKEN이 설정되지 않았습니다")
+        print("❌ Turso 정보를 찾을 수 없습니다")
         return None, None
     
     print(f"✅ 부트스트랩 정보 로드 완료")
+    print(f"   URL: {bootstrap_url[:50]}...")
     return bootstrap_url, bootstrap_token
 
 def load_all_credentials_from_db(turso_url, turso_token):
@@ -110,6 +121,8 @@ def load_all_credentials_from_db(turso_url, turso_token):
     
     except Exception as e:
         print(f"❌ DB에서 정보 로드 실패: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return None, None, None
 
 def get_final_turso_credentials(turso_settings, bootstrap_url, bootstrap_token):
@@ -230,7 +243,7 @@ def main():
     print("🎬 글로벌 핫데이터 수집기 시작")
     print("="*70)
     
-    # Step 1: 부트스트랩 Turso 정보 로드
+    # Step 1: 부트스트랩 Turso 정보 로드 (환경변수 없어도 기본값 사용)
     bootstrap_url, bootstrap_token = bootstrap_turso_credentials()
     if not bootstrap_url or not bootstrap_token:
         print("\n❌ 부트스트랩 실패. 프로그램 종료")
