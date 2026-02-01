@@ -80,12 +80,33 @@ def insert_to_turso(data_rows):
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """
             
-            execute_turso_query(sql, row)
+            # ← 여기서부터 추가
+            args = [
+                row[0],                          # collect_datetime
+                row[1],                          # country
+                row[2],                          # category
+                row[3],                          # detail_type
+                int(row[4]) if row[4] else 0,   # ranking (정수)
+                row[5],                          # thumbnail
+                row[6],                          # video_title
+                int(row[7]) if row[7] else 0,   # view_count (정수)
+                row[8],                          # channel_name
+                row[9],                          # handle
+                int(row[10]) if row[10] else 0, # subscriber_count (정수)
+                row[11],                         # tags
+                row[12],                         # video_link
+                row[13],                         # channel_id
+                row[14]                          # thumbnail_url
+            ]
+            # ← 여기까지 추가
+            
+            execute_turso_query(sql, args)  # ← row를 args로 변경
             inserted += 1
         except Exception as e:
             print(f"⚠️  행 삽입 실패: {str(e)}")
     
     return inserted
+
 
 # ========================================
 # 헬퍼 함수
