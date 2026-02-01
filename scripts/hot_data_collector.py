@@ -41,19 +41,36 @@ def execute_turso_query(sql, args=None):
     
     turso_api_url = TURSO_URL.replace('libsql://', 'https://') + '/v2/pipeline'
     
+    # args가 있으면 SQL에 직접 포함
+    if args:
+        # SQL의 ? 를 실제 값으로 치환
+        for arg in args:
+            if isinstance(arg, str):
+                # 문자열에서 따옴표 이스케이프
+                arg_escaped = arg.replace("'", "''")
+                sql = sql.replace('?', f"'{arg_escaped}'", 1)
+            else:
+                # 숫자는 그대로
+                sql = sql.replace('?', str(arg), 1)
+    
     payload = {
         'requests': [
             {
                 'type': 'execute',
                 'stmt': {
-                    'sql': sql,
-                    'args': args if args else []
+                    'sql': sql
                 }
             }
         ]
     }
     
     response = requests.post(turso_api_url, json=payload, headers=headers)
+    
+    if response.status_code != 200:
+        raise Exception(f"Turso 쿼리 실행 실패: {response.text}")
+    
+    return response.json()
+
     
     if response.status_code != 200:
         raise Exception(f"Turso 쿼리 실행 실패: {response.text}")
