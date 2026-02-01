@@ -17,11 +17,11 @@ jobs:
           python-version: '3.10'
       
       - name: 의존성 설치
-        run: |
-          pip install requests gspread google-auth-oauthlib google-auth-httplib2
+        run: pip install requests gspread google-auth-oauthlib google-auth-httplib2
       
       - name: 핫데이터 수집
         env:
           TURSO_URL: ${{ secrets.TURSO_URL }}
           TURSO_TOKEN: ${{ secrets.TURSO_TOKEN }}
+          GOOGLE_SERVICE_ACCOUNT: ${{ secrets.GOOGLE_SERVICE_ACCOUNT }}
         run: python scripts/hot_data_collector.py
