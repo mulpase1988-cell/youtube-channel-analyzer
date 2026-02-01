@@ -1,7 +1,8 @@
 # ========================================
 # YouTube 채널 분석기 v2 - GitHub Actions 버전
 # RSS + YouTube API 하이브리드 방식 + Shorts 채널 + 재시도 로직 + 배치 업데이트 (20행) + 배치 읽기
-# ✅ 수정: 영상 링크 → 썸네일 URL로 변경
+# ✅ 수정1: 영상 링크 → 썸네일 URL로 변경
+# ✅ 수정2: 운영기간(T열) = L열(최근 업로드) - K열(최초 업로드)
 # ========================================
 
 # ========================================
@@ -801,17 +802,15 @@ def get_channel_data_hybrid(channel_url, api_manager, row_number, row_data, work
         all_video_ids = all_video_ids[:30]
 
         if not all_video_ids:
-            print(f"  ⚠️  수집된 영상이 없습니다 (Shorts 전용 채널)")
+            print(f"  ⚠️  수집된 영상이 없습니다")
             # ✅ 영상이 없을 때 채널 개설일 사용
             if channel_created_date and not result['first_upload']:
                 result['first_upload'] = channel_created_date
-                try:
-                    created_date = datetime.fromisoformat(channel_created.replace('Z', '+00:00'))
-                    now = datetime.now(timezone.utc)
-                    result['operation_days'] = (now - created_date).days
-                    print(f"  ✅ 최초업로드 (채널 개설일): {result['first_upload']}")
-                except:
-                    pass
+                result['latest_upload'] = channel_created_date
+                result['operation_days'] = 0  # ✅ 수정: K열과 L열이 같으면 0
+                print(f"  ✅ 최초업로드 (채널 개설일): {result['first_upload']}")
+                print(f"  ✅ 최근업로드: {result['latest_upload']}")
+                print(f"  ✅ 운영기간: {result['operation_days']}일")
             return result
 
         @retry_with_backoff
@@ -926,20 +925,31 @@ def get_channel_data_hybrid(channel_url, api_manager, row_number, row_data, work
             if video_id in view_map and view_map[video_id][1]:
                 dates.append(view_map[video_id][1])
 
-        # ✅ 최초업로드 결정 로직 (개설일 포함)
+        # ✅ 수정: K열 - L열 기준으로 운영기간 계산
         if dates:
-            result['latest_upload'] = max(dates).strftime('%Y-%m-%d')
-            result['first_upload'] = min(dates).strftime('%Y-%m-%d')
-            first_date = min(dates)
-            result['operation_days'] = (now - first_date).days
-            print(f"  ✅ 최초업로드 (영상): {result['first_upload']}")
+            latest_date = max(dates)      # L열: 최근 업로드
+            first_date = min(dates)       # K열: 최초 업로드
+            
+            result['latest_upload'] = latest_date.strftime('%Y-%m-%d')
+            result['first_upload'] = first_date.strftime('%Y-%m-%d')
+            
+            # ⭐⭐⭐ 핵심 수정: 운영기간 = 최근 업로드 - 최초 업로드
+            result['operation_days'] = (latest_date - first_date).days
+            
+            print(f"  ✅ 최초업로드 (K열): {result['first_upload']}")
+            print(f"  ✅ 최근업로드 (L열): {result['latest_upload']}")
+            print(f"  ✅ 운영기간 (T열): {result['operation_days']}일")
+            
         elif channel_created_date:
             # 영상 데이터가 없으면 채널 개설일 사용
             result['first_upload'] = channel_created_date
+            result['latest_upload'] = channel_created_date
+            result['operation_days'] = 0  # ✅ 수정: K열과 L열이 같으면 0
+            
             try:
-                created_date = datetime.fromisoformat(channel_created.replace('Z', '+00:00'))
-                result['operation_days'] = (now - created_date).days
                 print(f"  ✅ 최초업로드 (채널 개설일): {result['first_upload']}")
+                print(f"  ✅ 최근업로드: {result['latest_upload']}")
+                print(f"  ✅ 운영기간: {result['operation_days']}일 (영상 없음)")
             except:
                 pass
 
@@ -1002,7 +1012,7 @@ def build_cell_list(row_num, data_dict, manual_values, row_data):
             (COL_VIEWS_10_TOTAL, data_dict.get('views_10', 0)),
             (COL_VIEWS_20_TOTAL, data_dict.get('views_20', 0)),
             (COL_VIEWS_30_TOTAL, data_dict.get('views_30', 0)),
-            (COL_OPERATION_DAYS, data_dict.get('operation_days', 0)),
+            (COL_OPERATION_DAYS, data_dict.get('operation_days', 0)),  # ✅ T열: 수정된 계산값
             (COL_COUNT_5D, data_dict.get('count_5d', 0)),
             (COL_COUNT_10D, data_dict.get('count_10d', 0)),
             (COL_CHANNEL_ID, data_dict.get('channel_id', '')),
@@ -1039,8 +1049,9 @@ def build_cell_list(row_num, data_dict, manual_values, row_data):
 def main():
     """메인 실행 함수"""
     print("=" * 60)
-    print("📂 YouTube 채널 분석기 v2 - GitHub Actions 버전 (배치 20행 + 배치 읽기)")
-    print("✅ 수정: 영상 링크 → 썸네일 URL로 변경")
+    print("📂 YouTube 채널 분석기 v2 - GitHub Actions 버전")
+    print("✅ 수정1: 영상 링크 → 썸네일 URL로 변경")
+    print("✅ 수정2: 운영기간(T열) = L열(최근 업로드) - K열(최초 업로드)")
     print("=" * 60)
 
     try:
