@@ -1,7 +1,6 @@
 import os
 import json
 import requests
-import re
 from datetime import datetime
 from google.oauth2 import service_account
 import gspread
@@ -34,72 +33,55 @@ def execute_turso_query(turso_url, turso_token, sql, args=None):
     
     return response.json()
 
-def bootstrap_turso_credentials():
-    """
-    Step 1: 환경변수에서 부트스트랩 Turso 정보 로드
-    환경변수가 없으면 사용자 입력 또는 DB에서 직접 조회
-    """
-    print("🔐 Step 1: 부트스트랩 Turso 정보 로드")
+def get_turso_credentials():
+    """Step 1: 환경변수에서 Turso 정보 로드"""
+    print("🔐 Step 1: 환경변수에서 Turso 정보 로드")
     
-    bootstrap_url = os.environ.get('TURSO_URL')
-    bootstrap_token = os.environ.get('TURSO_TOKEN')
+    turso_url = os.environ.get('TURSO_URL')
+    turso_token = os.environ.get('TURSO_TOKEN')
     
-    # 환경변수가 없으면 hardcode된 기본값 사용 (DB에 저장된 것과 동일)
-    if not bootstrap_url:
-        bootstrap_url = "libsql://youtube-analyzer-mulpase.turso.io"
-    
-    if not bootstrap_token:
-        bootstrap_token = "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.eyJpYXQiOjE3MzgyMzI1NTksImV4cCI6MTc0MzQzNjU1OSwiaWQiOiJmZDAxYjY2ZS1lZmE1LTExZWYtODAwYi1kMjkxOTk4ZmYzMzMiLCJzdWIiOiI4MzJiNGZiNC02NzVmLTExZWYtODAwMS1lZjI5YWE4YjZmOWEiLCJhcGlfa2V5IjoieWtjeFJjMWFybEdpTDhVRXJBTXVqSVA5aVdJRkh2SSIsInByaW1hcnkiOmZhbHNlLCJyYW5kb20iOiI1ZGUyMTY5YTc1MDY2N2RjIn0.9KqDyRFPVVvgqCj1hYnKEzKqVDqTnZnUvRrxVzPpMvnqIqwLlZKP_EhOuXx7rWuDw2VxQS-P_3HCp8P_IpJVCA"
-    
-    if not bootstrap_url or not bootstrap_token:
-        print("❌ Turso 정보를 찾을 수 없습니다")
+    if not turso_url or not turso_token:
+        print("❌ 환경변수 TURSO_URL, TURSO_TOKEN 필요")
         return None, None
     
-    print(f"✅ 부트스트랩 정보 로드 완료")
-    print(f"   URL: {bootstrap_url[:50]}...")
-    return bootstrap_url, bootstrap_token
+    print(f"✅ Turso 정보 로드 완료")
+    print(f"   URL: {turso_url[:50]}...")
+    return turso_url, turso_token
 
-def load_all_credentials_from_db(turso_url, turso_token):
-    """Step 2: DB에서 모든 인증 정보 로드"""
-    print("\n🔐 Step 2: DB에서 모든 인증 정보 로드")
+def load_google_service_account_from_db(turso_url, turso_token):
+    """DB에서 Google 서비스 계정 로드"""
+    print("\n🔐 Step 2: DB에서 Google 서비스 계정 로드")
     
     try:
-        # 1) turso_settings 테이블
-        sql = "SELECT setting_key, setting_value FROM turso_settings WHERE is_active = 'Y'"
+        sql = "SELECT secret_value FROM secrets_management WHERE secret_key = 'google_service_account' AND is_active = 'Y'"
         result = execute_turso_query(turso_url, turso_token, sql)
         
-        turso_settings = {}
+        if result and 'results' in result and len(result['results']) > 0:
+            rows = result['results'][0].get('rows', [])
+            if rows:
+                google_service_account = json.loads(rows[0][0])
+                print(f"✅ Google 서비스 계정 로드 완료")
+                return google_service_account
+        
+        print(f"❌ Google 서비스 계정을 찾을 수 없습니다")
+        return None
+    
+    except Exception as e:
+        print(f"❌ Google 서비스 계정 로드 실패: {str(e)}")
+        return None
+
+def load_api_keys_from_db(turso_url, turso_token):
+    """DB에서 활성 API 키 로드"""
+    print("📌 Google API 키 로드 중...")
+    
+    try:
+        sql = "SELECT api_key, key_name, status FROM api_key_management WHERE is_active = 'TRUE' ORDER BY number ASC"
+        result = execute_turso_query(turso_url, turso_token, sql)
+        
+        api_keys = []
         if result and 'results' in result and len(result['results']) > 0:
             rows = result['results'][0].get('rows', [])
             for row in rows:
-                turso_settings[row[0]] = row[1]
-        
-        print(f"✅ Turso 설정 로드 완료 ({len(turso_settings)}개 항목)")
-        
-        # 2) secrets_management 테이블
-        sql2 = "SELECT secret_value FROM secrets_management WHERE secret_key = 'google_service_account' AND is_active = 'Y'"
-        result2 = execute_turso_query(turso_url, turso_token, sql2)
-        
-        google_service_account = None
-        if result2 and 'results' in result2 and len(result2['results']) > 0:
-            rows2 = result2['results'][0].get('rows', [])
-            if rows2:
-                google_service_account = json.loads(rows2[0][0])
-        
-        if google_service_account:
-            print(f"✅ Google 서비스 계정 로드 완료")
-        else:
-            print(f"❌ Google 서비스 계정을 찾을 수 없습니다")
-            return None, None, None
-        
-        # 3) api_key_management 테이블
-        sql3 = "SELECT api_key, key_name, status FROM api_key_management WHERE is_active = 'TRUE' ORDER BY number ASC"
-        result3 = execute_turso_query(turso_url, turso_token, sql3)
-        
-        api_keys = []
-        if result3 and 'results' in result3 and len(result3['results']) > 0:
-            rows3 = result3['results'][0].get('rows', [])
-            for row in rows3:
                 api_key = row[0]
                 key_name = row[1]
                 status = row[2]
@@ -112,37 +94,15 @@ def load_all_credentials_from_db(turso_url, turso_token):
                     })
         
         if api_keys:
-            print(f"✅ Google API 키 로드 완료 ({len(api_keys)}개)")
+            print(f"✅ {len(api_keys)}개 API 키 로드 완료")
+            return api_keys
         else:
             print(f"❌ 활성 API 키가 없습니다")
-            return None, None, None
-        
-        return turso_settings, google_service_account, api_keys
+            return []
     
     except Exception as e:
-        print(f"❌ DB에서 정보 로드 실패: {str(e)}")
-        import traceback
-        traceback.print_exc()
-        return None, None, None
-
-def get_final_turso_credentials(turso_settings, bootstrap_url, bootstrap_token):
-    """Step 3: 최종 Turso 정보 결정"""
-    print("\n🔐 Step 3: 최종 Turso 정보 결정")
-    
-    final_url = turso_settings.get('turso_url') or bootstrap_url
-    final_token = turso_settings.get('turso_token') or bootstrap_token
-    
-    if turso_settings.get('turso_url'):
-        print(f"✅ DB의 turso_url 사용")
-    else:
-        print(f"✅ 부트스트랩 turso_url 사용")
-    
-    if turso_settings.get('turso_token'):
-        print(f"✅ DB의 turso_token 사용")
-    else:
-        print(f"✅ 부트스트랩 turso_token 사용")
-    
-    return final_url, final_token
+        print(f"❌ API 키 로드 실패: {str(e)}")
+        return []
 
 def load_countries_from_db(turso_url, turso_token):
     """DB에서 수집 대상 국가 로드"""
@@ -243,24 +203,27 @@ def main():
     print("🎬 글로벌 핫데이터 수집기 시작")
     print("="*70)
     
-    # Step 1: 부트스트랩 Turso 정보 로드 (환경변수 없어도 기본값 사용)
-    bootstrap_url, bootstrap_token = bootstrap_turso_credentials()
-    if not bootstrap_url or not bootstrap_token:
-        print("\n❌ 부트스트랩 실패. 프로그램 종료")
+    # Step 1: 환경변수에서 Turso 정보 로드
+    turso_url, turso_token = get_turso_credentials()
+    if not turso_url or not turso_token:
+        print("\n❌ 프로그램 종료")
         return
     
-    # Step 2: DB에서 모든 인증 정보 로드
-    turso_settings, google_service_account, api_keys = load_all_credentials_from_db(
-        bootstrap_url, bootstrap_token
-    )
-    if not turso_settings or not google_service_account or not api_keys:
-        print("\n❌ DB에서 인증 정보 로드 실패. 프로그램 종료")
+    # Step 2: DB에서 Google 서비스 계정 로드
+    google_service_account = load_google_service_account_from_db(turso_url, turso_token)
+    if not google_service_account:
+        print("\n❌ 프로그램 종료")
         return
     
-    # Step 3: 최종 Turso 정보 결정
-    final_turso_url, final_turso_token = get_final_turso_credentials(
-        turso_settings, bootstrap_url, bootstrap_token
-    )
+    # Step 3: DB에서 API 키 로드
+    print("\n📋 Step 3: DB에서 설정 로드")
+    api_keys = load_api_keys_from_db(turso_url, turso_token)
+    countries = load_countries_from_db(turso_url, turso_token)
+    categories = load_categories_from_db(turso_url, turso_token)
+    
+    if not api_keys or not countries or not categories:
+        print("\n❌ 필수 설정이 부족합니다. 프로그램 종료")
+        return
     
     # Step 4: Google Sheets 인증
     print("\n🔐 Step 4: Google Sheets 인증")
@@ -276,41 +239,24 @@ def main():
         print(f"❌ Google Sheets 인증 실패: {str(e)}")
         return
     
-    # Step 5: DB에서 국가, 카테고리 로드
-    print("\n📋 Step 5: DB에서 설정 로드")
-    countries = load_countries_from_db(final_turso_url, final_turso_token)
-    categories = load_categories_from_db(final_turso_url, final_turso_token)
+    # Step 5: 기존 데이터 삭제
+    clear_hot_data_table(turso_url, turso_token)
     
-    if not countries or not categories or not api_keys:
-        print("\n❌ 필수 설정이 부족합니다. 프로그램 종료")
-        return
-    
-    # Step 6: 기존 데이터 삭제
-    clear_hot_data_table(final_turso_url, final_turso_token)
-    
-    # Step 7: 수집 계획 표시
-    print("\n🎯 Step 6: 수집 계획")
+    # Step 6: 수집 계획 표시
+    print("\n🎯 Step 5: 수집 계획")
     print(f"   📌 API 키: {len(api_keys)}개")
-    for key_info in api_keys:
-        print(f"      - {key_info['name']} ({key_info['status']})")
-    
-    print(f"\n   🌍 국가: {len(countries)}개")
+    print(f"   🌍 국가: {len(countries)}개")
     print(f"   📂 카테고리: {len(categories)}개")
     print(f"   🔢 총 조합 수: {len(api_keys) * len(countries) * len(categories)}")
     
-    # API 키 사용 테스트 (할당량 1 소비로 업데이트)
+    # API 키 사용 테스트
     if api_keys:
         test_api_key = api_keys[0]['key']
-        update_api_key_usage(final_turso_url, final_turso_token, test_api_key, 1, False)
+        update_api_key_usage(turso_url, turso_token, test_api_key, 1, False)
         print(f"\n✅ API 키 업데이트 테스트 완료 (할당량 +1 소비)")
     
     print("\n" + "="*70)
     print("✅ 모든 정보 로드 및 준비 완료!")
-    print("="*70)
-    print("📝 다음 단계:")
-    print("   - YouTube API 호출 로직 구현")
-    print("   - global_hot_data 테이블에 데이터 삽입")
-    print("   - GitHub Actions 자동화")
     print("="*70)
 
 if __name__ == '__main__':
