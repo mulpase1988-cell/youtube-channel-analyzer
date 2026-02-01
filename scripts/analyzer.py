@@ -1,6 +1,7 @@
 # ========================================
 # YouTube 채널 분석기 v2 - GitHub Actions 버전
 # RSS + YouTube API 하이브리드 방식 + Shorts 채널 + 재시도 로직 + 배치 업데이트 (20행) + 배치 읽기
+# ✅ 수정: 영상 링크 → 썸네일 URL로 변경
 # ========================================
 
 # ========================================
@@ -74,7 +75,7 @@ COL_VIEWS_5D = 25          # Y: 5일조회수합계
 COL_VIEWS_10D = 26         # Z: 10일조회수합계
 COL_VIEWS_15D = 27         # AA: 15일조회수합계
 COL_YT_CATEGORY = 28       # AB: YT카테고리
-COL_VIDEO_LINKS = [29, 30, 31, 32, 33]  # AC~AG: 영상1~5
+COL_VIDEO_LINKS = [29, 30, 31, 32, 33]  # AC~AG: 썸네일1~5
 
 # 수동 입력 컬럼
 MANUAL_INPUT_COLUMNS = [COL_CATEGORY_1, COL_CATEGORY_2, COL_MEMO, 
@@ -159,19 +160,31 @@ def get_category_name(category_id):
         return '미분류'
     return CATEGORY_MAP.get(str(category_id), '미분류')
 
-def get_video_url(video_id):
-    """영상 ID로 YouTube URL 생성"""
-    if not video_id:
-        return ''
-    return f"https://www.youtube.com/watch?v={video_id}"
-
-def get_video_urls(video_ids, max_count=5):
-    """상위 5개 영상의 YouTube URL 리스트 반환"""
+def get_thumbnail_urls(video_infos, max_count=5):
+    """✅ 수정: 상위 5개 영상의 썸네일 URL 리스트 반환 (고해상도 우선)"""
     urls = []
-    for vid in video_ids[:max_count]:
-        urls.append(get_video_url(vid))
+    for video_info in video_infos[:max_count]:
+        try:
+            # 썸네일 URL 선택 우선순위: maxres > standard > high > medium > default
+            thumbnails = video_info.get('thumbnails', {})
+            
+            thumbnail_url = (
+                thumbnails.get('maxres', {}).get('url') or      # 최고 해상도 (1280x720)
+                thumbnails.get('standard', {}).get('url') or    # 표준 (640x480)
+                thumbnails.get('high', {}).get('url') or        # 높음 (320x180)
+                thumbnails.get('medium', {}).get('url') or      # 중간 (320x180)
+                thumbnails.get('default', {}).get('url') or     # 기본 (120x90)
+                ''
+            )
+            urls.append(thumbnail_url)
+        except Exception as e:
+            print(f"  ⚠️  썸네일 추출 실패: {e}")
+            urls.append('')
+    
+    # 부족한 칸 채우기
     while len(urls) < max_count:
         urls.append('')
+    
     return urls
 
 def parse_published_date(date_str):
@@ -812,6 +825,8 @@ def get_channel_data_hybrid(channel_url, api_manager, row_number, row_data, work
         api_manager.update_quota_used(key_name, 1)
 
         view_map = {}
+        video_infos = []  # ✅ 추가: 썸네일 정보 저장
+
         for video in videos_response.get('items', []):
             try:
                 video_id = video['id']
@@ -826,6 +841,18 @@ def get_channel_data_hybrid(channel_url, api_manager, row_number, row_data, work
                         pass
 
                 view_map[video_id] = (view_count, published_at)
+                
+                # ✅ 추가: 썸네일 정보 저장
+                try:
+                    thumbnails = video['snippet'].get('thumbnails', {})
+                    video_infos.append({
+                        'id': video_id,
+                        'thumbnails': thumbnails
+                    })
+                except Exception as e:
+                    print(f"  ⚠️  썸네일 정보 추출 실패 ({video_id}): {e}")
+                    video_infos.append({'id': video_id, 'thumbnails': {}})
+                    
             except Exception as e:
                 print(f"  ⚠️  비디오 정보 파싱 실패: {e}")
                 continue
@@ -837,7 +864,9 @@ def get_channel_data_hybrid(channel_url, api_manager, row_number, row_data, work
             except:
                 pass
 
-        result['video_links'] = get_video_urls([v['id'] for v in videos_response.get('items', [])], max_count=5)
+        # ✅ 수정: 영상 링크 대신 썸네일 URL 저장
+        result['video_links'] = get_thumbnail_urls(video_infos, max_count=5)
+        print(f"  ✅ 썸네일 URL 수집 완료: {len([u for u in result['video_links'] if u])}개")
 
         views_list = []
         for video_id in all_video_ids:
@@ -987,7 +1016,7 @@ def build_cell_list(row_num, data_dict, manual_values, row_data):
             if value or value == 0:  # 0도 포함
                 cell_list.append(gspread.Cell(row_num, col_idx, value))
         
-        # 영상 링크 (AC~AG)
+        # ✅ 수정: 썸네일 URL 저장 (AC~AG)
         video_links = data_dict.get('video_links', [''] * 5)
         for i, col_idx in enumerate(COL_VIDEO_LINKS):
             if video_links[i]:
@@ -1011,6 +1040,7 @@ def main():
     """메인 실행 함수"""
     print("=" * 60)
     print("📂 YouTube 채널 분석기 v2 - GitHub Actions 버전 (배치 20행 + 배치 읽기)")
+    print("✅ 수정: 영상 링크 → 썸네일 URL로 변경")
     print("=" * 60)
 
     try:
