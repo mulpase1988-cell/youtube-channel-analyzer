@@ -3,6 +3,7 @@
 # RSS + YouTube API 하이브리드 방식 + Shorts 채널 + 재시도 로직 + 배치 업데이트 (20행) + 배치 읽기
 # ✅ 수정1: 영상 링크 → 썸네일 URL로 변경
 # ✅ 수정2: 운영기간(T열) = L열(최근 업로드) - K열(최초 업로드)
+# ✅ 수정3: 채널 썸네일 URL 추가 (AH열)
 # ========================================
 
 # ========================================
@@ -76,7 +77,8 @@ COL_VIEWS_5D = 25          # Y: 5일조회수합계
 COL_VIEWS_10D = 26         # Z: 10일조회수합계
 COL_VIEWS_15D = 27         # AA: 15일조회수합계
 COL_YT_CATEGORY = 28       # AB: YT카테고리
-COL_VIDEO_LINKS = [29, 30, 31, 32, 33]  # AC~AG: 썸네일1~5
+COL_VIDEO_LINKS = [29, 30, 31, 32, 33]  # AC~AG: 영상썸네일1~5
+COL_CHANNEL_THUMBNAIL = 34  # AH: 채널 썸네일 ✅ 추가
 
 # 수동 입력 컬럼
 MANUAL_INPUT_COLUMNS = [COL_CATEGORY_1, COL_CATEGORY_2, COL_MEMO, 
@@ -665,6 +667,7 @@ def get_channel_data_hybrid(channel_url, api_manager, row_number, row_data, work
         'operation_days': 0,
         'channel_id': '',
         'yt_category': '미분류',
+        'channel_thumbnail': '',  # ✅ 추가
         'video_links': ['', '', '', '', '']
     }
 
@@ -733,6 +736,17 @@ def get_channel_data_hybrid(channel_url, api_manager, row_number, row_data, work
 
         result['channel_name'] = snippet.get('title', '')
         result['handle'] = snippet.get('customUrl', '')
+        
+        # ✅ 채널 썸네일 추출 (고해상도 우선)
+        thumbnails = snippet.get('thumbnails', {})
+        result['channel_thumbnail'] = (
+            thumbnails.get('high', {}).get('url') or      # 최고 해상도 (800x800)
+            thumbnails.get('medium', {}).get('url') or    # 중간 (240x240)
+            thumbnails.get('default', {}).get('url') or   # 기본 (88x88)
+            ''
+        )
+        if result['channel_thumbnail']:
+            print(f"  ✅ 채널 썸네일: {result['channel_thumbnail'][:80]}...")
         
         country_code = snippet.get('country', '').strip()
         if not country_code:
@@ -1009,6 +1023,7 @@ def build_cell_list(row_num, data_dict, manual_values, row_data):
             (COL_VIEWS_10D, data_dict.get('views_10d', 0)),
             (COL_VIEWS_15D, data_dict.get('views_15d', 0)),
             (COL_YT_CATEGORY, data_dict.get('yt_category', '미분류')),
+            (COL_CHANNEL_THUMBNAIL, data_dict.get('channel_thumbnail', '')),  # ✅ 추가
         ]
         
         for col_idx, value in columns_data:
@@ -1039,6 +1054,7 @@ def main():
     print("📂 YouTube 채널 분석기 v2 - GitHub Actions 버전")
     print("✅ 수정1: 영상 링크 → 썸네일 URL로 변경")
     print("✅ 수정2: 운영기간(T열) = L열(최근 업로드) - K열(최초 업로드)")
+    print("✅ 수정3: 채널 썸네일 URL 추가 (AH열)")
     print("=" * 60)
 
     try:
