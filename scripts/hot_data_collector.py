@@ -41,36 +41,20 @@ def execute_turso_query(sql, args=None):
     
     turso_api_url = TURSO_URL.replace('libsql://', 'https://') + '/v2/pipeline'
     
-    # args가 있으면 SQL에 직접 포함
-    if args:
-        # SQL의 ? 를 실제 값으로 치환
-        for arg in args:
-            if isinstance(arg, str):
-                # 문자열에서 따옴표 이스케이프
-                arg_escaped = arg.replace("'", "''")
-                sql = sql.replace('?', f"'{arg_escaped}'", 1)
-            else:
-                # 숫자는 그대로
-                sql = sql.replace('?', str(arg), 1)
-    
+    # Turso 공식 방식: args 배열로 전송
     payload = {
         'requests': [
             {
                 'type': 'execute',
                 'stmt': {
-                    'sql': sql
+                    'sql': sql,
+                    'args': args if args else []  # 리스트로 그대로 전송
                 }
             }
         ]
     }
     
     response = requests.post(turso_api_url, json=payload, headers=headers)
-    
-    if response.status_code != 200:
-        raise Exception(f"Turso 쿼리 실행 실패: {response.text}")
-    
-    return response.json()
-
     
     if response.status_code != 200:
         raise Exception(f"Turso 쿼리 실행 실패: {response.text}")
@@ -97,30 +81,30 @@ def insert_to_turso(data_rows):
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """
             
-            # ← 여기서부터 추가
+            # 타입 변환: 숫자는 숫자로, 문자는 문자로
             args = [
-                row[0],                          # collect_datetime
-                row[1],                          # country
-                row[2],                          # category
-                row[3],                          # detail_type
-                int(row[4]) if row[4] else 0,   # ranking (정수)
-                row[5],                          # thumbnail
-                row[6],                          # video_title
-                int(row[7]) if row[7] else 0,   # view_count (정수)
-                row[8],                          # channel_name
-                row[9],                          # handle
-                int(row[10]) if row[10] else 0, # subscriber_count (정수)
-                row[11],                         # tags
-                row[12],                         # video_link
-                row[13],                         # channel_id
-                row[14]                          # thumbnail_url
+                row[0],                          # collect_datetime (문자)
+                row[1],                          # country (문자)
+                row[2],                          # category (문자)
+                row[3],                          # detail_type (문자)
+                row[4],                          # ranking (정수)
+                row[5],                          # thumbnail (문자)
+                row[6],                          # video_title (문자)
+                row[7],                          # view_count (정수)
+                row[8],                          # channel_name (문자)
+                row[9],                          # handle (문자)
+                row[10],                         # subscriber_count (정수)
+                row[11],                         # tags (문자)
+                row[12],                         # video_link (문자)
+                row[13],                         # channel_id (문자)
+                row[14]                          # thumbnail_url (문자)
             ]
-            # ← 여기까지 추가
             
-            execute_turso_query(sql, args)  # ← row를 args로 변경
+            execute_turso_query(sql, args)
             inserted += 1
         except Exception as e:
             print(f"⚠️  행 삽입 실패: {str(e)}")
+            continue
     
     return inserted
 
