@@ -12,26 +12,35 @@ def execute_turso_query(turso_url, turso_token, sql, args=None):
         'Content-Type': 'application/json'
     }
     
-    turso_api_url = turso_url.replace('libsql://', 'https://') + '/v2/pipeline'
-    
-    statement = {'sql': sql}
-    if args:
-        statement['args'] = args
+    turso_api_url = turso_url.replace('libsql://', 'https://') + '/v2/turso'
     
     payload = {
-        'requests': [{'type': 'execute', 'statement': statement}]
+        'requests': [
+            {
+                'type': 'execute',
+                'stmt': {
+                    'sql': sql,
+                    'args': args if args else []
+                }
+            }
+        ]
     }
     
-    response = requests.post(
-        turso_api_url,
-        json=payload,
-        headers=headers
-    )
+    try:
+        response = requests.post(
+            turso_api_url,
+            json=payload,
+            headers=headers,
+            timeout=10
+        )
+        
+        if response.status_code != 200:
+            raise Exception(f"Turso 쿼리 실행 실패: {response.text}")
+        
+        return response.json()
     
-    if response.status_code != 200:
-        raise Exception(f"Turso 쿼리 실행 실패: {response.text}")
-    
-    return response.json()
+    except Exception as e:
+        raise
 
 def get_turso_credentials():
     """Step 1: 환경변수에서 Turso 정보 로드"""
