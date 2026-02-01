@@ -176,10 +176,12 @@ def get_thumbnail_urls(video_infos, max_count=5):
                 thumbnails.get('default', {}).get('url') or     # 기본 (120x90)
                 ''
             )
-            urls.append(thumbnail_url)
-        except Exception as e:
-            print(f"  ⚠️  썸네일 추출 실패: {e}")
-            urls.append('')
+            # ✅ IMAGE() 함수로 변환
+            if thumbnail_url:
+                image_formula = f'=IMAGE("{thumbnail_url}")'
+                urls.append(image_formula)
+            else:
+                urls.append('')
     
     # 부족한 칸 채우기
     while len(urls) < max_count:
