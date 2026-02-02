@@ -992,19 +992,35 @@ def preserve_manual_columns_batch(all_sheet_data, row_num):
 # 11. 배치 업데이트 (20행씩)
 # ========================================
 def build_cell_list(row_num, data_dict, manual_values, row_data):
-    """행 데이터를 셀 리스트로 변환"""
+    """행 데이터를 셀 리스트로 변환 (국가 컬럼 로직 수정됨)"""
     cell_list = []
     
     try:
+        # 기존 데이터 읽기
         existing_url = row_data[COL_URL - 1] if len(row_data) >= COL_URL else ''
         existing_video_count = str(row_data[COL_VIDEO_COUNT - 1]).strip() if len(row_data) >= COL_VIDEO_COUNT else ''
         existing_total_views = str(row_data[COL_TOTAL_VIEWS - 1]).strip() if len(row_data) >= COL_TOTAL_VIEWS else ''
         
+        # ✅ [수정] 국가(D열) 처리 로직
+        existing_country = str(row_data[COL_COUNTRY - 1]).strip() if len(row_data) >= COL_COUNTRY else ''
+        api_country = data_dict.get('country', '')
+        
+        final_country = api_country  # 기본값: API에서 가져온 값 (빈 셀일 경우)
+
+        if existing_country:
+            # 기존 값이 있는 경우
+            if existing_country.upper() in COUNTRY_MAP:
+                # 영어 코드(예: US, KR)인 경우 → 한글로 변환하여 업데이트
+                final_country = COUNTRY_MAP[existing_country.upper()]
+            else:
+                # 이미 한글이거나 그 외의 값인 경우 → 기존 값 유지 (업데이트 X)
+                final_country = existing_country
+
         columns_data = [
             (COL_CHANNEL_NAME, data_dict.get('channel_name', '')),
             (COL_URL, existing_url),
             (COL_HANDLE, data_dict.get('handle', '')),
-            (COL_COUNTRY, data_dict.get('country', '')),
+            (COL_COUNTRY, final_country),  # ✅ 수정된 국가 값 적용
             (COL_SUBSCRIBERS, data_dict.get('subscribers', 0)),
             (COL_VIDEO_COUNT, data_dict.get('video_count', 0) if not existing_video_count else existing_video_count),
             (COL_TOTAL_VIEWS, data_dict.get('total_views', 0) if not existing_total_views else existing_total_views),
@@ -1023,10 +1039,12 @@ def build_cell_list(row_num, data_dict, manual_values, row_data):
             (COL_VIEWS_10D, data_dict.get('views_10d', 0)),
             (COL_VIEWS_15D, data_dict.get('views_15d', 0)),
             (COL_YT_CATEGORY, data_dict.get('yt_category', '미분류')),
-            (COL_CHANNEL_THUMBNAIL, data_dict.get('channel_thumbnail', '')),  # ✅ 추가
+            (COL_CHANNEL_THUMBNAIL, data_dict.get('channel_thumbnail', '')),
         ]
         
         for col_idx, value in columns_data:
+            # 0인 경우도 기록해야 하므로 value가 None이 아니면 추가 (빈 문자열은 건너뛸 수도 있음)
+            # 여기서는 값이 존재하거나 0이면 업데이트
             if value or value == 0:
                 cell_list.append(gspread.Cell(row_num, col_idx, value))
         
