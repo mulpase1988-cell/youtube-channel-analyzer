@@ -27,4 +27,4 @@ jobs:
           SHEET_NAME: '유튜브보물창고_테스트'
           DATA_TAB_NAME: '데이터'
           RANGE: '2-50'
-        run: python scripts/analyzer.py
+        run: python scripts/analyzer22.py
