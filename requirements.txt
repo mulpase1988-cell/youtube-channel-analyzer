@@ -14,5 +14,8 @@ python-dateutil==2.8.2
 requests==2.31.0
 urllib3==2.1.0
 
-# API 대체용 (새로 추가)
+# API 대체용 (v4 스크립트 필수)
+scrapetube==2.5.1
+
+# (선택) 이전 버전 호환성을 위해 남겨둠 (v4에서는 사용 안 함)
 yt-dlp>=2025.1.1
