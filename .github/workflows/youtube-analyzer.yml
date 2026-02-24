@@ -1,14 +1,23 @@
-name: YouTube Analyzer (No API - Complete)
+name: YouTube 채널 분석기
 
 on:
   schedule:
-    - cron: '0 1 * * *'  # 매일 UTC 01:00 (한국 시간 오전 10:00)
+    - cron: '0 1 * * *'   # 매일 01:00 UTC (09:00 KST)
   workflow_dispatch:
+    inputs:
+      start_row:
+        description: '시작 행번호 (기본: 2)'
+        required: false
+        default: '2'
+      end_row:
+        description: '마지막 행번호 (기본: 전체)'
+        required: false
+        default: ''
 
 jobs:
   analyze:
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    timeout-minutes: 60
     
     steps:
       - name: Checkout code
@@ -23,24 +32,13 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          # requirements.txt가 있으면 설치
-          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
-          # [중요] requirements.txt 반영 안 됐을 경우를 대비해 필수 라이브러리 강제 설치
-          pip install scrapetube feedparser requests gspread oauth2client
+          pip install gspread oauth2client feedparser python-dateutil requests
       
       - name: Run YouTube Analyzer
         env:
           GOOGLE_SERVICE_ACCOUNT: ${{ secrets.GOOGLE_SERVICE_ACCOUNT }}
           SHEET_NAME: '유튜브보물창고_테스트'
           DATA_TAB_NAME: '데이터'
-          RANGE: '2-100'
+          RANGE: ${{ github.event.inputs.start_row }}${{ github.event.inputs.end_row != '' && format('-{0}', github.event.inputs.end_row) || '' }}
         run: |
           python scripts/analyzer22.py
-      
-      - name: Upload logs (on failure)
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: analyzer-logs-${{ github.run_id }}
-          path: logs/
-          retention-days: 7
