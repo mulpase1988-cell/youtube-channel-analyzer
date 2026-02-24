@@ -14,6 +14,7 @@ import requests
 import re
 import urllib.parse
 import time
+import sys
 
 # ========================================
 # 1. 환경변수 설정
@@ -32,8 +33,8 @@ DATA_TAB_NAME = os.environ.get('DATA_TAB_NAME', '데이터')
 
 # 컬럼 매핑
 COL_HANDLE = 3            # C: 핸들
-COL_LATEST_UPLOAD = 12    # L: 최근업로드 (최근 영상 1의 업로드일자)
-COL_COLLECT_DATE = 13     # M: 수집일 (실행 날짜)
+COL_LATEST_UPLOAD = 12    # L: 최근업로드
+COL_COLLECT_DATE = 13     # M: 수집일
 COL_CHANNEL_ID = 24       # X: channel_id
 COL_VIEWS_5D = 25         # Y: 5일조회수합계
 COL_VIEWS_10D = 26        # Z: 10일조회수합계
@@ -41,7 +42,54 @@ COL_VIEWS_15D = 27        # AA: 15일조회수합계
 COL_VIDEO_LINKS = [29, 30, 31, 32, 33]  # AC~AG: 영상1~5
 
 # ========================================
-# 2. 채널 ID 추출
+# 2. 처리 범위 설정 (환경변수 또는 커맨드라인 인자)
+# ========================================
+
+def get_range_from_input():
+    """
+    처리 범위를 환경변수 또는 커맨드라인 인자에서 가져오기
+    
+    환경변수: RANGE="2-50" 또는 RANGE="2"
+    커맨드라인: python script.py 2 50
+    
+    반환: (start_row, end_row)
+    """
+    
+    # 1. 커맨드라인 인자 확인
+    if len(sys.argv) >= 3:
+        try:
+            start_row = int(sys.argv[1])
+            end_row = int(sys.argv[2])
+            print(f"✅ 커맨드라인 인자에서 범위 설정: {start_row}행 ~ {end_row}행\n")
+            return start_row, end_row
+        except ValueError:
+            print(f"⚠️ 커맨드라인 인자 파싱 실패, 환경변수 확인...\n")
+    
+    # 2. 환경변수 확인
+    range_input = os.environ.get('RANGE', '').strip()
+    
+    if range_input:
+        if '-' in range_input:
+            try:
+                start_row, end_row = map(int, range_input.split('-'))
+                print(f"✅ 환경변수에서 범위 설정: {start_row}행 ~ {end_row}행\n")
+                return start_row, end_row
+            except ValueError:
+                print(f"⚠️ 환경변수 파싱 실패: {range_input}\n")
+        else:
+            try:
+                start_row = int(range_input)
+                print(f"✅ 환경변수에서 시작행 설정: {start_row}행부터\n")
+                return start_row, None  # end_row는 나중에 설정
+            except ValueError:
+                print(f"⚠️ 환경변수 파싱 실패: {range_input}\n")
+    
+    # 3. 기본값: 전체 처리
+    print(f"ℹ️ 범위를 지정하지 않았습니다. 전체 데이터를 처리합니다.\n")
+    return 2, None
+
+# ========================================
+# 3. 채널 ID 추출
 # ========================================
 
 def extract_channel_id(handle_or_url):
@@ -118,7 +166,7 @@ def extract_channel_id(handle_or_url):
         return None
 
 # ========================================
-# 3. RSS 피드 파싱
+# 4. RSS 피드 파싱
 # ========================================
 
 def parse_rss_feed(channel_id, max_videos=15):
@@ -192,7 +240,7 @@ def parse_rss_feed(channel_id, max_videos=15):
         return []
 
 # ========================================
-# 4. 조회수 추출
+# 5. 조회수 추출
 # ========================================
 
 def get_video_views(video_id):
@@ -224,7 +272,7 @@ def get_video_views(video_id):
         return 0
 
 # ========================================
-# 5. 구간별 조회수 계산
+# 6. 구간별 조회수 계산
 # ========================================
 
 def calculate_views_by_period(videos):
@@ -250,7 +298,7 @@ def calculate_views_by_period(videos):
     }
 
 # ========================================
-# 6. Google Sheets 연결
+# 7. Google Sheets 연결
 # ========================================
 
 def connect_to_sheet():
@@ -273,7 +321,7 @@ def connect_to_sheet():
     return worksheet
 
 # ========================================
-# 7. 배치 업데이트
+# 8. 배치 업데이트
 # ========================================
 
 def create_cell(row, col, value):
@@ -288,15 +336,14 @@ def update_row_data(worksheet, row_num, channel_id, period_data):
     if channel_id:
         cells.append(create_cell(row_num, COL_CHANNEL_ID, channel_id))
     
-    # L열: 최근업로드 (최근 영상 1의 업로드일자, yyyy-mm-dd 형식)
+    # L열: 최근업로드
     if period_data['videos_5']:
         latest_video = period_data['videos_5'][0]
         if latest_video['published_date'] != 'Unknown':
-            # published_date는 'YYYY-MM-DD HH:MM:SS' 형식이므로 날짜 부분만 추출
             latest_date = latest_video['published_date'].split(' ')[0]
             cells.append(create_cell(row_num, COL_LATEST_UPLOAD, latest_date))
     
-    # M열: 수집일 (오늘 날짜, yyyy-mm-dd 형식)
+    # M열: 수집일
     collect_date = datetime.now(timezone.utc).strftime('%Y-%m-%d')
     cells.append(create_cell(row_num, COL_COLLECT_DATE, collect_date))
     
@@ -319,7 +366,7 @@ def update_row_data(worksheet, row_num, channel_id, period_data):
     return cells
 
 # ========================================
-# 8. 메인 실행
+# 9. 메인 실행
 # ========================================
 
 def main():
@@ -339,11 +386,10 @@ def main():
         print(f"✅ {len(all_data)}행 데이터 로드 완료\n")
         
         # 처리 범위 설정
-        range_input = os.environ.get('RANGE', '').strip()
-        if range_input and '-' in range_input:
-            start_row, end_row = map(int, range_input.split('-'))
-        else:
-            start_row = 2
+        start_row, end_row = get_range_from_input()
+        
+        # end_row가 None이면 전체 데이터 처리
+        if end_row is None:
             end_row = len(all_data)
         
         print(f"📌 처리 범위: {start_row}행 ~ {end_row}행")
