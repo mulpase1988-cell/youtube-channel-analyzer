@@ -17,7 +17,7 @@ on:
 jobs:
   analyze:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 120
     
     steps:
       - name: Checkout code
@@ -27,12 +27,15 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-          cache: 'pip'
       
-      - name: Install dependencies
+      - name: Install dependencies from requirements.txt
         run: |
-          python -m pip install --upgrade pip
-          pip install gspread oauth2client feedparser python-dateutil requests
+          python -m pip install --upgrade pip setuptools wheel
+          pip install -r requirements.txt --no-cache-dir
+      
+      - name: Verify scrapetube installation
+        run: |
+          python -c "import scrapetube; print('✅ scrapetube installed successfully')"
       
       - name: Run YouTube Analyzer
         env:
@@ -42,3 +45,11 @@ jobs:
           RANGE: ${{ github.event.inputs.start_row }}${{ github.event.inputs.end_row != '' && format('-{0}', github.event.inputs.end_row) || '' }}
         run: |
           python scripts/analyzer22.py
+      
+      - name: Upload logs (on failure)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: analyzer-logs-${{ github.run_id }}
+          path: logs/
+          retention-days: 7
