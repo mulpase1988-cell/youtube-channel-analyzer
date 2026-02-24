@@ -1,6 +1,5 @@
 # ========================================
-# YouTube 채널 분석기 v2 - GitHub Actions 버전 (고정)
-# RSS + yt-dlp 하이브리드 방식 (API 호출 제거)
+# YouTube 채널 분석기 v2 - yt-dlp 최적화 버전
 # ========================================
 
 import gspread
@@ -16,7 +15,6 @@ import urllib.parse
 import traceback
 import os
 import tempfile
-import random
 import requests
 from urllib3.util.retry import Retry
 from requests.adapters import HTTPAdapter
@@ -31,7 +29,6 @@ SERVICE_ACCOUNT_JSON = os.environ.get('GOOGLE_SERVICE_ACCOUNT')
 if not SERVICE_ACCOUNT_JSON:
     raise Exception("❌ GOOGLE_SERVICE_ACCOUNT 환경변수가 설정되지 않았습니다")
 
-# JSON을 임시 파일로 저장
 with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.json') as f:
     f.write(SERVICE_ACCOUNT_JSON)
     SERVICE_ACCOUNT_FILE = f.name
@@ -40,9 +37,8 @@ def cleanup_temp_file():
     try:
         if SERVICE_ACCOUNT_FILE and os.path.exists(SERVICE_ACCOUNT_FILE):
             os.remove(SERVICE_ACCOUNT_FILE)
-            print("✅ 임시 파일 정리 완료")
-    except Exception as e:
-        print(f"⚠️ 임시 파일 정리 실패: {e}")
+    except:
+        pass
 
 atexit.register(cleanup_temp_file)
 
@@ -94,15 +90,6 @@ COUNTRY_MAP = {
     'PH': '필리핀', 'CN': '중국', 'SG': '싱가포르', 'MY': '말레이시아'
 }
 
-CATEGORY_MAP = {
-    '1': '영화/애니메이션', '2': '자동차/차량', '10': '음악',
-    '15': '반려동물/동물', '17': '스포츠', '18': '단편 동영상',
-    '19': '여행/이벤트', '20': '게임', '21': '브이로그',
-    '22': '인물/블로그', '23': '코미디', '24': '엔터테인먼트',
-    '25': '뉴스/정치', '26': '노하우/스타일', '27': '교육',
-    '28': '과학기술', '29': '비영리/사회운동'
-}
-
 # ========================================
 # 헬퍼 함수
 # ========================================
@@ -112,20 +99,12 @@ def get_country_name(country_code):
         return '한국'
     return COUNTRY_MAP.get(country_code.upper(), country_code)
 
-def get_category_name(category_id):
-    if not category_id:
-        return '미분류'
-    return CATEGORY_MAP.get(str(category_id), '미분류')
-
 def get_thumbnail_urls(video_infos, max_count=5):
     urls = []
     for video_info in video_infos[:max_count]:
-        try:
-            if video_info.get('thumbnail_url'):
-                urls.append(video_info['thumbnail_url'])
-            else:
-                urls.append('')
-        except:
+        if video_info.get('thumbnail_url'):
+            urls.append(video_info['thumbnail_url'])
+        else:
             urls.append('')
     
     while len(urls) < max_count:
@@ -144,33 +123,11 @@ def parse_published_date(date_str):
     except:
         return None
 
-MAX_RETRIES = 3
-RETRY_DELAY = 2
-
-def retry_with_backoff(func):
-    def wrapper(*args, **kwargs):
-        for attempt in range(MAX_RETRIES):
-            try:
-                return func(*args, **kwargs)
-            except Exception as e:
-                if attempt < MAX_RETRIES - 1:
-                    wait_time = RETRY_DELAY * (2 ** attempt)
-                    print(f"  ⚠️  재시도 ({attempt + 1}/{MAX_RETRIES})... {wait_time}초 대기")
-                    time.sleep(wait_time)
-                    continue
-                else:
-                    raise
-        
-        raise Exception(f"❌ {MAX_RETRIES}회 재시도 후 실패")
-    
-    return wrapper
-
 # ========================================
 # RSS 파서
 # ========================================
 
-@retry_with_backoff
-def parse_rss_feed(channel_id, max_videos=15):
+def parse_rss_feed(channel_id, max_videos=30):
     """YouTube RSS 피드에서 최근 영상 정보 추출"""
     rss_url = f"https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}"
 
@@ -185,7 +142,7 @@ def parse_rss_feed(channel_id, max_videos=15):
     session.mount('https://', adapter)
 
     try:
-        print(f"  📡 RSS 요청 중... (타임아웃: 10초)")
+        print(f"  📡 RSS 다운로드 중...")
         sys.stdout.flush()
         
         response = session.get(rss_url, timeout=10)
@@ -234,154 +191,77 @@ def parse_rss_feed(channel_id, max_videos=15):
         print(f"  ❌ RSS 타임아웃")
         return []
     except Exception as e:
-        print(f"  ❌ RSS 오류: {str(e)[:100]}")
+        print(f"  ❌ RSS 오류")
         return []
 
 # ========================================
-# yt-dlp 함수
+# yt-dlp 최적화 (빠른 모드)
 # ========================================
 
-def get_channel_info_ytdlp(channel_url):
-    """yt-dlp로 채널 정보 추출"""
+def get_channel_name_ytdlp_fast(channel_url):
+    """yt-dlp로 채널명 빠르게 추출 (최소 정보만)"""
     try:
+        # URL 정규화
         if '@' in channel_url:
             handle = channel_url.split('@')[-1].split('/')[0]
             channel_url = f"https://www.youtube.com/@{handle}"
         elif '/channel/' not in channel_url:
             channel_url = channel_url if channel_url.startswith('http') else f"https://www.youtube.com{channel_url}"
         
-        print(f"  🎬 yt-dlp 실행 중...")
+        print(f"  🎬 yt-dlp 실행 중 (빠른 모드)...")
         sys.stdout.flush()
         
+        # 최소 정보만 추출하도록 최적화
         result = subprocess.run(
-            ['yt-dlp', '--dump-json', '--no-warnings', '-e', 'generic', channel_url],
+            ['yt-dlp', 
+             '--dump-json',
+             '--no-warnings',
+             '--no-clean-infojson',
+             '--extract-audio',  # 빠르게 하기 위해 필수 정보만
+             '-e', 'generic',
+             '-f', 'worst',  # 가장 낮은 품질 선택 (빠름)
+             '--socket-timeout', '5',
+             channel_url],
             capture_output=True,
             text=True,
-            timeout=15
+            timeout=8  # 8초로 단축
         )
         
-        if result.returncode != 0:
-            print(f"  ⚠️  yt-dlp 실패 (코드: {result.returncode})")
-            return None
-        
-        if not result.stdout.strip():
-            print(f"  ⚠️  yt-dlp 출력 없음")
-            return None
-        
-        data = json.loads(result.stdout)
-        
-        channel_info = {
-            'channel_id': data.get('channel_id', ''),
-            'channel_name': data.get('uploader', '') or data.get('channel', ''),
-            'handle': data.get('channel_url', '').split('@')[-1] if data.get('channel_url') else '',
-            'thumbnail_url': data.get('thumbnail', ''),
-        }
-        
-        print(f"  ✅ yt-dlp 완료")
-        sys.stdout.flush()
-        return channel_info
-    
-    except subprocess.TimeoutExpired:
-        print(f"  ❌ yt-dlp 타임아웃 (15초)")
-        return None
-    except FileNotFoundError:
-        print(f"  ❌ yt-dlp 설치 안 됨")
-        return None
-    except Exception as e:
-        print(f"  ❌ yt-dlp 오류: {str(e)[:100]}")
-        return None
-
-# ========================================
-# 채널 ID 추출
-# ========================================
-
-def extract_channel_id_from_url(channel_url, row_number, row_data=None):
-    """채널 URL에서 channel_id 추출"""
-    if '/channel/' in channel_url:
-        return channel_url.split('/channel/')[-1].split('/')[0].split('?')[0]
-
-    if row_data and len(row_data) >= COL_HANDLE:
-        handle_from_sheet = str(row_data[COL_HANDLE - 1]).strip()
-        if handle_from_sheet:
-            if handle_from_sheet.startswith('@'):
-                handle_from_sheet = handle_from_sheet[1:]
-            
+        if result.returncode == 0 and result.stdout.strip():
             try:
-                channel_url_for_handle = f"https://www.youtube.com/@{handle_from_sheet}"
-                channel_info = get_channel_info_ytdlp(channel_url_for_handle)
-                if channel_info and channel_info.get('channel_id'):
-                    return channel_info['channel_id']
+                data = json.loads(result.stdout)
+                channel_info = {
+                    'channel_name': data.get('uploader', '') or data.get('channel', ''),
+                    'channel_id': data.get('channel_id', ''),
+                    'thumbnail': data.get('thumbnail', '')
+                }
+                
+                if channel_info['channel_name']:
+                    print(f"  ✅ yt-dlp 완료: {channel_info['channel_name'][:30]}")
+                    sys.stdout.flush()
+                    return channel_info
             except:
                 pass
-
-    decoded_url = urllib.parse.unquote(channel_url)
-    handle_match = re.search(r'@([^/\s?]+)', decoded_url)
-    
-    if not handle_match:
+        
+        print(f"  ⚠️  yt-dlp 정보 없음")
         return None
-
-    handle = handle_match.group(1)
-
-    try:
-        channel_url_for_handle = f"https://www.youtube.com/@{handle}"
-        channel_info = get_channel_info_ytdlp(channel_url_for_handle)
-        if channel_info and channel_info.get('channel_id'):
-            return channel_info['channel_id']
-    except:
-        pass
-
-    return None
-
-# ========================================
-# Shorts 채널 데이터
-# ========================================
-
-def get_shorts_channel_data(channel_id, row_number):
-    """Shorts 전용 채널에서 영상 데이터 수집"""
-    try:
-        shorts_url = f"https://www.youtube.com/channel/{channel_id}/shorts"
-        
-        result = subprocess.run(
-            ['yt-dlp', '--dump-json', '--no-warnings', '-e', 'generic',
-             '--playlist-items', '1:30', shorts_url],
-            capture_output=True,
-            text=True,
-            timeout=15
-        )
-        
-        if result.returncode == 0:
-            shorts_videos = []
-            for line in result.stdout.strip().split('\n'):
-                try:
-                    data = json.loads(line)
-                    published_str = data.get('upload_date', '')
-                    if published_str and len(published_str) == 8:
-                        published_str = f"{published_str[0:4]}-{published_str[4:6]}-{published_str[6:8]}"
-                    
-                    shorts_videos.append({
-                        'video_id': data.get('id', ''),
-                        'title': data.get('title', ''),
-                        'published_at': parse_published_date(published_str),
-                        'thumbnail_url': data.get('thumbnail', '')
-                    })
-                except:
-                    pass
-            
-            if shorts_videos:
-                print(f"  ✓ Shorts: {len(shorts_videos)}개")
-            
-            return shorts_videos
-    except:
-        pass
     
-    return []
+    except subprocess.TimeoutExpired:
+        print(f"  ⚠️  yt-dlp 타임아웃 (8초)")
+        return None
+    except FileNotFoundError:
+        print(f"  ⚠️  yt-dlp 설치 안 됨")
+        return None
+    except Exception as e:
+        print(f"  ⚠️  yt-dlp 오류")
+        return None
 
 # ========================================
 # 메인 데이터 수집
 # ========================================
 
 def get_channel_data_hybrid(channel_url, row_number, row_data, worksheet):
-    """RSS + yt-dlp 하이브리드 방식으로 채널 데이터 수집"""
+    """RSS + yt-dlp (빠른 모드) 하이브리드"""
     result = {
         'channel_name': '',
         'handle': '',
@@ -409,6 +289,7 @@ def get_channel_data_hybrid(channel_url, row_number, row_data, worksheet):
     }
 
     try:
+        # channel_id 확인
         existing_channel_id = ''
         if len(row_data) >= COL_CHANNEL_ID:
             existing_channel_id = str(row_data[COL_CHANNEL_ID - 1]).strip()
@@ -416,67 +297,29 @@ def get_channel_data_hybrid(channel_url, row_number, row_data, worksheet):
         channel_id = existing_channel_id
 
         if not channel_id:
-            print(f"  📍 channel_id 검색 중...")
-            sys.stdout.flush()
-            
-            channel_id = extract_channel_id_from_url(channel_url, row_number, row_data)
-
-            if not channel_id:
-                print(f"  ❌ channel_id 추출 실패")
-                return None
-
-            try:
-                cell_list = [gspread.Cell(row_number, COL_CHANNEL_ID, channel_id)]
-                worksheet.update_cells(cell_list)
-                print(f"  ✅ channel_id 저장: {channel_id}")
-                sys.stdout.flush()
-                time.sleep(1)
-            except Exception as e:
-                print(f"  ⚠️  저장 실패: {e}")
-        else:
-            print(f"  ✓ channel_id 사용: {channel_id}")
-            sys.stdout.flush()
+            print(f"  ❌ channel_id 없음, 스킵")
+            return None
 
         result['channel_id'] = channel_id
 
-        print(f"  🎬 채널 정보 추출 중...")
-        sys.stdout.flush()
-        
-        channel_info = get_channel_info_ytdlp(channel_url)
-        
-        if channel_info:
-            result['channel_name'] = channel_info.get('channel_name', '')
-            result['handle'] = channel_info.get('handle', '')
-            result['channel_thumbnail'] = channel_info.get('thumbnail_url', '')
-
+        # RSS 수집
         print(f"  📡 RSS 수집 중...")
         sys.stdout.flush()
         
-        rss_videos = parse_rss_feed(channel_id, max_videos=15)
-
-        if not rss_videos or len(rss_videos) < 5:
-            print(f"  🎬 Shorts 확인 중...")
-            sys.stdout.flush()
-            
-            shorts_videos = get_shorts_channel_data(channel_id, row_number)
-            if shorts_videos:
-                rss_videos.extend(shorts_videos)
+        rss_videos = parse_rss_feed(channel_id, max_videos=30)
 
         if not rss_videos:
             print(f"  ⚠️  영상 없음")
-            return result
+            return None
 
-        # 중복 제거
-        unique_videos = {}
-        for video in rss_videos:
-            if video['video_id']:
-                unique_videos[video['video_id']] = video
+        # yt-dlp로 채널명 추출 시도 (실패해도 계속 진행)
+        print(f"  🎬 채널명 추출 중...")
+        sys.stdout.flush()
         
-        rss_videos = sorted(
-            unique_videos.values(),
-            key=lambda v: v['published_at'] or datetime.now(timezone.utc),
-            reverse=True
-        )[:30]
+        channel_info = get_channel_name_ytdlp_fast(channel_url)
+        if channel_info:
+            result['channel_name'] = channel_info.get('channel_name', '')
+            result['channel_thumbnail'] = channel_info.get('thumbnail', '')
 
         # 영상 정보 처리
         dates = []
@@ -531,8 +374,7 @@ def get_channel_data_hybrid(channel_url, row_number, row_data, worksheet):
         return result
 
     except Exception as e:
-        print(f"  ❌ 오류: {e}")
-        traceback.print_exc()
+        print(f"  ❌ 오류: {str(e)[:100]}")
         return None
 
 # ========================================
@@ -577,7 +419,7 @@ def build_cell_list(row_num, data_dict, manual_values, row_data):
             else:
                 final_country = existing_country
         else:
-            final_country = data_dict.get('country', '')
+            final_country = ''
 
         columns_data = [
             (COL_CHANNEL_NAME, data_dict.get('channel_name', '')),
@@ -631,7 +473,7 @@ def build_cell_list(row_num, data_dict, manual_values, row_data):
 def main():
     """메인 실행 함수"""
     print("=" * 80)
-    print("📂 YouTube 채널 분석기 v2")
+    print("📂 YouTube 채널 분석기 v2 - yt-dlp 최적화 버전")
     print("=" * 80)
     print(f"⏰ 시작: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
     sys.stdout.flush()
@@ -689,7 +531,7 @@ def main():
         batch_cells = []
         batch_rows_count = 0
 
-        for row_num in range(start_row, end_row + 1):
+        for row_num in range(start_row, min(end_row + 1, start_row + 99)):
             try:
                 row_idx = row_num - 1
                 if row_idx >= len(all_sheet_data):
@@ -706,8 +548,7 @@ def main():
                 if not url and not handle:
                     continue
 
-                print(f"\n[{row_num - start_row + 1}/{end_row - start_row + 1}] Row {row_num}")
-                print(f"  URL: {url[:50]}...")
+                print(f"[{row_num - start_row + 1}/{min(end_row - start_row + 1, 99)}] Row {row_num}")
                 sys.stdout.flush()
 
                 manual_values = preserve_manual_columns_batch(all_sheet_data, row_num)
@@ -716,8 +557,6 @@ def main():
 
                 if not data:
                     fail_count += 1
-                    print(f"  ❌ 실패")
-                    sys.stdout.flush()
                     continue
 
                 cells = build_cell_list(row_num, data, manual_values, row_data)
@@ -731,20 +570,20 @@ def main():
                         sys.stdout.flush()
                         
                         worksheet.update_cells(batch_cells)
-                        print(f"✅ 완료")
+                        print(f"✅ 완료\n")
                         sys.stdout.flush()
                         
                         batch_cells = []
                         batch_rows_count = 0
-                        time.sleep(2)
+                        time.sleep(1)
                 
-                time.sleep(2)
+                time.sleep(1)
 
             except Exception as e:
-                print(f"  ❌ 오류: {str(e)[:100]}")
+                print(f"  ❌ 오류\n")
                 sys.stdout.flush()
                 fail_count += 1
-                time.sleep(3)
+                time.sleep(2)
                 continue
 
         if batch_cells:
