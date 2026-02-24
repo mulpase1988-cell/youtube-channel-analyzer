@@ -1,7 +1,7 @@
 # ========================================
-# YouTube 채널 분석기 v7 - Shorts 탭 필수 체크
-# 해결: "Scrapetube 완료: 0개" 문제 해결
-# 전략: Videos 탭이 비어있으면 Shorts 탭을 자동으로 탐색
+# YouTube 채널 분석기 - GitHub Actions 버전
+# RSS만 사용 (조회수 미수집)
+# 채널 ID 자동 저장
 # ========================================
 
 import gspread
@@ -16,11 +16,9 @@ import re
 import urllib.parse
 import time
 import sys
-import scrapetube
-import random
 
 # ========================================
-# 1. 설정 및 환경변수
+# 1. 설정
 # ========================================
 
 SERVICE_ACCOUNT_JSON = os.environ.get('GOOGLE_SERVICE_ACCOUNT')
@@ -35,256 +33,202 @@ SHEET_NAME = os.environ.get('SHEET_NAME', '유튜브보물창고_테스트')
 DATA_TAB_NAME = os.environ.get('DATA_TAB_NAME', '데이터')
 
 # 컬럼 매핑
-COL_CHANNEL_NAME = 1
-COL_URL = 2
 COL_HANDLE = 3
-COL_SUBSCRIBERS = 8
-COL_LATEST_UPLOAD = 12
-COL_COLLECT_DATE = 13
-COL_CHANNEL_ID = 24
-COL_VIEWS_5D = 25
-COL_VIEWS_10D = 26
-COL_VIEWS_15D = 27
-COL_VIDEO_LINKS = [29, 30, 31, 32, 33]
+COL_LATEST_UPLOAD = 12     # L: 최근업로드
+COL_COLLECT_DATE = 13      # M: 수집일
+COL_CHANNEL_ID = 24        # X: channel_id
+COL_VIDEO_LINKS = [29, 30, 31, 32, 33]  # AC~AG: 영상 썸네일 1~5
 
 # ========================================
-# 2. 헬퍼 함수
+# 2. 범위 입력
 # ========================================
-
-def parse_korean_count(text):
-    """조회수 텍스트 파싱"""
-    if not text: return 0
-    try:
-        text = str(text).strip()
-        text = re.sub(r'[^0-9.천만억조KMB]', '', text)
-        if not text: return 0
-        num_match = re.search(r'(\d+\.?\d*)', text)
-        if not num_match: return 0
-        num = float(num_match.group(1))
-        
-        if '조' in text: return int(num * 1000000000000)
-        elif '억' in text: return int(num * 100000000)
-        elif '만' in text or 'M' in text: return int(num * 10000) if '만' in text else int(num * 1000000)
-        elif '천' in text or 'K' in text: return int(num * 1000)
-        else: return int(num)
-    except: return 0
 
 def get_range_from_input():
+    """처리 범위 가져오기"""
     if len(sys.argv) >= 3:
-        try: return int(sys.argv[1]), int(sys.argv[2])
-        except: pass
+        try:
+            return int(sys.argv[1]), int(sys.argv[2])
+        except:
+            pass
+    
     range_input = os.environ.get('RANGE', '').strip()
-    if range_input:
-        if '-' in range_input:
-            try: s, e = map(int, range_input.split('-')); return s, e
-            except: pass
-        else:
-            try: return int(range_input), None
-            except: pass
+    if range_input and '-' in range_input:
+        try:
+            s, e = map(int, range_input.split('-'))
+            return s, e
+        except:
+            pass
+    
     return 2, None
 
 # ========================================
-# 3. 데이터 수집 핵심 (RSS + Scrapetube Multi-Tab)
-# ========================================
-
-def get_channel_data_v7(channel_id):
-    """
-    RSS로 기본 정보를 확보하고, Scrapetube로 Shorts/Videos 탭을 모두 뒤져서 조회수를 확보
-    """
-    if not channel_id: return None
-
-    # [Step 1] RSS로 데이터 우선 확보 (실패시에도 최소한의 데이터 보장)
-    rss_url = f"https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}"
-    print(f"  📡 RSS 데이터 요청 중...")
-    
-    rss_videos = []
-    rss_map = {} # video_id -> published_date
-    
-    try:
-        feed = feedparser.parse(rss_url)
-        for entry in feed.entries:
-            vid = None
-            if hasattr(entry, 'yt_videoid'): vid = entry.yt_videoid
-            elif 'id' in entry: vid = entry.id.split(':')[-1]
-            
-            if vid:
-                pub_date = 'Unknown'
-                try:
-                    dt = dateutil_parser.parse(entry.published)
-                    if dt.tzinfo is None: dt = dt.replace(tzinfo=timezone.utc)
-                    pub_date = dt.strftime('%Y-%m-%d %H:%M:%S')
-                except: pass
-                
-                # 썸네일
-                thumb = f"https://i.ytimg.com/vi/{vid}/mqdefault.jpg"
-                if hasattr(entry, 'media_thumbnail'):
-                    thumb = entry.media_thumbnail[0]['url']
-                
-                rss_map[vid] = pub_date
-                rss_videos.append({
-                    'video_id': vid,
-                    'title': entry.title,
-                    'published_date': pub_date,
-                    'views': 0, # RSS는 조회수 없음
-                    'thumbnail_url': thumb
-                })
-    except Exception as e:
-        print(f"  ⚠️ RSS 에러: {e}")
-
-    print(f"  ✅ RSS 완료: {len(rss_videos)}개 영상 확보")
-
-    # [Step 2] Scrapetube로 조회수 채우기 (Shorts -> Videos 순서로 탐색)
-    # 쇼츠 채널일 확률이 높으므로 shorts를 먼저 탐색
-    content_types = ['shorts', 'videos', 'streams'] 
-    
-    merged_videos = {} # video_id -> video_obj
-    
-    # RSS 데이터를 기본으로 채움
-    for v in rss_videos:
-        merged_videos[v['video_id']] = v
-
-    found_in_scrapetube = False
-    
-    for c_type in content_types:
-        # 이미 충분한 데이터를 찾았고, RSS에 있는 영상들의 조회수를 찾았다면 중단
-        if found_in_scrapetube: 
-            break
-            
-        print(f"  👁️ 탭 검색 중: {c_type}...")
-        
-        try:
-            # sleep_interval로 차단 방지
-            scrape_gen = scrapetube.get_channel(channel_id, content_type=c_type, limit=30, sleep_interval=0.1)
-            
-            count = 0
-            for v in scrape_gen:
-                count += 1
-                video_id = v.get('videoId')
-                if not video_id: continue
-                
-                # 조회수 파싱
-                view_count = 0
-                if 'viewCountText' in v:
-                    vt = v['viewCountText']
-                    label = vt.get('simpleText', '')
-                    if not label and 'runs' in vt:
-                        label = vt['runs'][0].get('text', '')
-                    if not label:
-                        label = vt.get('accessibility', {}).get('accessibilityData', {}).get('label', '')
-                    view_count = parse_korean_count(label)
-                
-                # 썸네일
-                thumb = f"https://i.ytimg.com/vi/{video_id}/mqdefault.jpg"
-                if 'thumbnail' in v and 'thumbnails' in v['thumbnail']:
-                    thumb = v['thumbnail']['thumbnails'][-1]['url']
-                
-                # RSS에 있는 영상이면 업데이트, 없으면 추가
-                if video_id in merged_videos:
-                    merged_videos[video_id]['views'] = view_count
-                    merged_videos[video_id]['thumbnail_url'] = thumb # 더 좋은 썸네일일 수 있음
-                else:
-                    # RSS엔 없지만(오래된 영상 등) Scrapetube엔 있는 경우
-                    # 날짜는 알 수 없으므로 Unknown 처리하거나 RSS 맵에 없으면 무시할 수도 있음
-                    # 여기서는 추가함
-                    merged_videos[video_id] = {
-                        'video_id': video_id,
-                        'title': '', # 제목 파싱 생략
-                        'published_date': 'Unknown', # Scrapetube는 정확한 날짜 안줌
-                        'views': view_count,
-                        'thumbnail_url': thumb
-                    }
-            
-            if count > 0:
-                print(f"    ✓ {c_type} 탭에서 {count}개 발견")
-                found_in_scrapetube = True
-                
-        except Exception as e:
-            # print(f"    ⚠️ {c_type} 탐색 중 오류: {e}")
-            pass
-
-    final_list = list(merged_videos.values())
-    
-    # 만약 Scrapetube가 모두 실패했더라도 RSS 데이터가 있으면 반환 (성공 처리)
-    if not found_in_scrapetube and rss_videos:
-        print("  ⚠️ 조회수 수집 실패했으나 RSS 데이터로 대체합니다 (조회수 0)")
-        return rss_videos
-        
-    return final_list
-
-# ========================================
-# 4. ID 추출
+# 3. 채널 ID 추출
 # ========================================
 
 def extract_channel_id(handle_or_url):
-    if not handle_or_url: return None
+    """채널 ID 추출"""
+    if not handle_or_url:
+        return None
+    
     url = str(handle_or_url).strip()
     
+    # 방법 1: /channel/UC... 직접 추출
     if '/channel/UC' in url:
-        return url.split('/channel/')[-1].split('/')[0].split('?')[0]
-        
-    # 헤더와 쿠키를 사용하여 봇 차단 우회 시도
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-        'Accept-Language': 'en-US,en;q=0.9',
-        'Cookie': 'CONSENT=YES+KR.ko+20150622-23-0'
-    }
+        try:
+            channel_id = url.split('/channel/')[-1].split('/')[0].split('?')[0]
+            if channel_id.startswith('UC') and len(channel_id) == 24:
+                print(f"  ✅ 방법1 성공: {channel_id}")
+                return channel_id
+        except:
+            pass
     
+    # 방법 2: 웹 스크래핑으로 추출
     try:
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Cookie': 'CONSENT=YES+KR.ko+20150622-23-0'
+        }
+        
         clean_url = url.split('/shorts')[0].split('/videos')[0]
         if not clean_url.startswith('http'):
-            clean_url = f"https://www.youtube.com/{clean_url}" if clean_url.startswith('@') else f"https://www.youtube.com/@{clean_url}"
-            
-        res = requests.get(clean_url, headers=headers, timeout=10)
+            clean_url = f"https://www.youtube.com/{clean_url}"
         
-        match = re.search(r'"channelId":"(UC[^"]+)"', res.text)
-        if match: return match.group(1)
-        
-        match = re.search(r'"browseId":"(UC[^"]+)"', res.text)
-        if match: return match.group(1)
-        
-    except: pass
+        response = requests.get(clean_url, headers=headers, timeout=10)
+        match = re.search(r'"channelId":"(UC[^"]+)"', response.text)
+        if match:
+            channel_id = match.group(1)
+            if channel_id.startswith('UC') and len(channel_id) == 24:
+                print(f"  ✅ 방법2 성공: {channel_id}")
+                return channel_id
+    except Exception as e:
+        print(f"  ⚠️ 웹 스크래핑 실패: {e}")
+    
+    print(f"  ❌ 채널 ID 추출 실패")
     return None
 
 # ========================================
-# 5. 시트 업데이트
+# 4. RSS 데이터 수집
+# ========================================
+
+def get_rss_data(channel_id):
+    """RSS에서 데이터 수집 (최근 5개 영상)"""
+    if not channel_id:
+        return None
+    
+    rss_url = f"https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}"
+    print(f"  📡 RSS 데이터 요청 중...")
+    
+    videos = []
+    
+    try:
+        feed = feedparser.parse(rss_url)
+        
+        if not feed.entries:
+            print(f"  ⚠️ RSS 피드가 비어있음")
+            return None
+        
+        for entry in feed.entries[:5]:  # 최근 5개만
+            try:
+                # Video ID 추출
+                vid = None
+                if hasattr(entry, 'yt_videoid'):
+                    vid = entry.yt_videoid
+                elif 'id' in entry:
+                    vid = entry.id.split(':')[-1]
+                
+                if not vid:
+                    continue
+                
+                # 제목
+                title = entry.title if hasattr(entry, 'title') else ''
+                
+                # 발행 날짜
+                pub_date = 'Unknown'
+                try:
+                    dt = dateutil_parser.parse(entry.published)
+                    if dt.tzinfo is None:
+                        dt = dt.replace(tzinfo=timezone.utc)
+                    pub_date = dt.strftime('%Y-%m-%d %H:%M:%S')
+                except:
+                    pass
+                
+                # 썸네일 URL
+                thumbnail = f"https://i.ytimg.com/vi/{vid}/mqdefault.jpg"
+                if hasattr(entry, 'media_thumbnail') and entry.media_thumbnail:
+                    thumbnail = entry.media_thumbnail[0]['url']
+                
+                videos.append({
+                    'video_id': vid,
+                    'title': title,
+                    'published_date': pub_date,
+                    'thumbnail_url': thumbnail
+                })
+                
+            except Exception as e:
+                print(f"  ⚠️ 항목 파싱 실패: {e}")
+                continue
+        
+        print(f"  ✅ RSS 완료: {len(videos)}개 영상")
+        return videos if videos else None
+        
+    except Exception as e:
+        print(f"  ❌ RSS 파싱 실패: {e}")
+        return None
+
+# ========================================
+# 5. 시트 연결 및 업데이트
 # ========================================
 
 def connect_to_sheet():
-    scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
-    creds = ServiceAccountCredentials.from_json_keyfile_name(SERVICE_ACCOUNT_FILE, scope)
+    """Google Sheets 연결"""
+    scope = [
+        'https://spreadsheets.google.com/feeds',
+        'https://www.googleapis.com/auth/drive'
+    ]
+    
+    creds = ServiceAccountCredentials.from_json_keyfile_name(
+        SERVICE_ACCOUNT_FILE, scope
+    )
     gc = gspread.authorize(creds)
-    return gc.open(SHEET_NAME).worksheet(DATA_TAB_NAME)
-
-def calculate_stats(videos):
-    # 날짜순 정렬 (Unknown은 맨 뒤로)
-    sorted_v = sorted(videos, key=lambda x: x['published_date'] if x['published_date'] != 'Unknown' else '0000', reverse=True)
     
-    return {
-        'views_5': sum(v['views'] for v in sorted_v[:5]),
-        'views_10': sum(v['views'] for v in sorted_v[:10]),
-        'views_15': sum(v['views'] for v in sorted_v[:15]),
-        'videos_5': sorted_v[:5]
-    }
+    spreadsheet = gc.open(SHEET_NAME)
+    worksheet = spreadsheet.worksheet(DATA_TAB_NAME)
+    
+    print(f"✅ '{SHEET_NAME}' 시트 연결 성공\n")
+    
+    return worksheet
 
-def update_row(row_num, channel_id, stats):
+def create_cell(row, col, value):
+    """셀 객체 생성"""
+    return gspread.Cell(row, col, value)
+
+def update_row_data(row_num, channel_id, videos):
+    """행 데이터 업데이트"""
     cells = []
+    
+    # X열: channel_id (자동 저장)
     if channel_id:
-        cells.append(gspread.Cell(row_num, COL_CHANNEL_ID, channel_id))
+        cells.append(create_cell(row_num, COL_CHANNEL_ID, channel_id))
     
-    if stats['videos_5']:
-        latest = stats['videos_5'][0]['published_date']
-        if latest != 'Unknown':
-            cells.append(gspread.Cell(row_num, COL_LATEST_UPLOAD, latest.split(' ')[0]))
-            
-    cells.append(gspread.Cell(row_num, COL_COLLECT_DATE, datetime.now(timezone.utc).strftime('%Y-%m-%d')))
-    cells.append(gspread.Cell(row_num, COL_VIEWS_5D, stats['views_5']))
-    cells.append(gspread.Cell(row_num, COL_VIEWS_10D, stats['views_10']))
-    cells.append(gspread.Cell(row_num, COL_VIEWS_15D, stats['views_15']))
+    # L열: 최근업로드 (최근 영상 발행일)
+    if videos:
+        latest_video = videos[0]
+        if latest_video['published_date'] != 'Unknown':
+            latest_date = latest_video['published_date'].split(' ')[0]
+            cells.append(create_cell(row_num, COL_LATEST_UPLOAD, latest_date))
     
-    for i, col in enumerate(COL_VIDEO_LINKS):
-        if i < len(stats['videos_5']):
-            cells.append(gspread.Cell(row_num, col, stats['videos_5'][i]['thumbnail_url']))
-            
+    # M열: 수집일 (오늘 날짜)
+    collect_date = datetime.now(timezone.utc).strftime('%Y-%m-%d')
+    cells.append(create_cell(row_num, COL_COLLECT_DATE, collect_date))
+    
+    # AC~AG열: 영상 1~5 썸네일 URL
+    for i, col_idx in enumerate(COL_VIDEO_LINKS):
+        if i < len(videos):
+            thumbnail = videos[i].get('thumbnail_url', '')
+            if thumbnail:
+                cells.append(create_cell(row_num, col_idx, thumbnail))
+    
     return cells
 
 # ========================================
@@ -292,77 +236,118 @@ def update_row(row_num, channel_id, stats):
 # ========================================
 
 def main():
-    print("="*60)
-    print("🚀 YouTube 분석기 v7 - Shorts 탭 우선 검색")
-    print("="*60)
+    """메인 실행"""
+    print("=" * 70)
+    print("🎬 YouTube 채널 분석기 - GitHub Actions 버전")
+    print("📡 RSS 데이터만 수집 (최근업로드, 썸네일)")
+    print("🔗 채널 ID 자동 저장")
+    print("=" * 70)
+    print()
     
     try:
+        # 시트 연결
         worksheet = connect_to_sheet()
+        
+        # 데이터 로드
+        print("📥 시트 데이터 로드 중...")
         all_data = worksheet.get_all_values()
+        print(f"✅ {len(all_data)}행 로드 완료\n")
+        
+        # 범위 설정
         start_row, end_row = get_range_from_input()
-        if end_row is None: end_row = len(all_data)
+        if end_row is None:
+            end_row = len(all_data)
         
-        print(f"📌 처리 범위: {start_row} ~ {end_row}")
+        print(f"📌 처리 범위: {start_row}행 ~ {end_row}행")
+        print(f"📦 총 {end_row - start_row + 1}개 행\n")
         
+        print("=" * 70)
+        print("🚀 처리 시작")
+        print("=" * 70)
+        print()
+        
+        success_count = 0
+        fail_count = 0
         batch_cells = []
-        success = 0
-        fail = 0
         
-        for row_num in range(start_row, min(end_row + 1, len(all_data) + 1)):
-            print(f"\n🔍 Row {row_num} 처리 중...")
+        for row_num in range(start_row, min(end_row + 1, len(all_data))):
+            print(f"[{row_num - start_row + 1}/{end_row - start_row + 1}] Row {row_num} 처리 중...")
+            
             try:
-                if row_num - 1 >= len(all_data): break
                 row_data = all_data[row_num - 1]
                 
-                cid = None
+                # Channel ID 가져오기
+                channel_id = None
                 if len(row_data) >= COL_CHANNEL_ID:
-                    exist = str(row_data[COL_CHANNEL_ID-1]).strip()
-                    if exist.startswith('UC'): cid = exist
+                    existing_id = str(row_data[COL_CHANNEL_ID - 1]).strip()
+                    if existing_id.startswith('UC'):
+                        channel_id = existing_id
+                        print(f"  ✓ 기존 channel_id: {channel_id}")
                 
-                if not cid and len(row_data) >= COL_HANDLE:
-                    raw_h = str(row_data[COL_HANDLE-1]).strip()
-                    if raw_h: cid = extract_channel_id(raw_h)
+                # Channel ID 없으면 핸들에서 추출
+                if not channel_id:
+                    if len(row_data) >= COL_HANDLE:
+                        handle = str(row_data[COL_HANDLE - 1]).strip()
+                        if handle:
+                            print(f"  📍 핸들에서 channel_id 추출 시도...")
+                            channel_id = extract_channel_id(handle)
                 
-                if not cid:
-                    print("  ❌ 채널 ID 없음")
-                    fail += 1
+                if not channel_id:
+                    print(f"  ❌ channel_id 없음, 넘어감")
+                    fail_count += 1
                     continue
                 
-                print(f"  🔗 ID: {cid}")
-                videos = get_channel_data_v7(cid)
+                print(f"  🔗 ID: {channel_id}")
+                
+                # RSS 데이터 수집
+                videos = get_rss_data(channel_id)
                 
                 if not videos:
-                    print("  ❌ 데이터 수집 실패 (RSS/Scrapetube 모두 실패)")
-                    fail += 1
+                    print(f"  ❌ RSS 데이터 없음")
+                    fail_count += 1
                     continue
                 
-                stats = calculate_stats(videos)
-                new_cells = update_row(row_num, cid, stats)
-                batch_cells.extend(new_cells)
-                success += 1
+                # 행 업데이트
+                cells = update_row_data(row_num, channel_id, videos)
+                batch_cells.extend(cells)
                 
-                print(f"  ✅ 수집 완료: 5개합계 {stats['views_5']:,}")
+                print(f"  ✅ 완료: 영상 {len(videos)}개, 최근업로드 {videos[0]['published_date'].split(' ')[0]}")
+                success_count += 1
                 
-                if len(batch_cells) >= 20:
+                # 배치 업데이트 (20개씩)
+                if len(batch_cells) >= 20 or row_num == end_row:
+                    print(f"  📤 배치 저장: {len(batch_cells)}개 셀")
                     worksheet.update_cells(batch_cells)
-                    print("  📤 배치 저장 완료")
                     batch_cells = []
+                    print(f"  💤 2초 대기...")
                     time.sleep(2)
                 
-                time.sleep(1)
+                time.sleep(0.5)
                 
             except Exception as e:
-                print(f"  ❌ 에러: {e}")
-                fail += 1
-                
+                print(f"  ❌ 오류: {e}")
+                import traceback
+                traceback.print_exc()
+                fail_count += 1
+                time.sleep(2)
+                continue
+        
+        # 남은 배치 저장
         if batch_cells:
+            print(f"\n📤 최종 저장: {len(batch_cells)}개 셀")
             worksheet.update_cells(batch_cells)
-            print("📤 최종 저장 완료")
-            
-        print(f"\n✅ 성공: {success} | ❌ 실패: {fail}")
+        
+        print("\n" + "=" * 70)
+        print("📊 최종 결과")
+        print("=" * 70)
+        print(f"✅ 성공: {success_count}개")
+        print(f"❌ 실패: {fail_count}개")
+        print("=" * 70)
         
     except Exception as e:
-        print(f"❌ 치명적 오류: {e}")
+        print(f"\n❌ 치명적 오류: {e}")
+        import traceback
+        traceback.print_exc()
 
 if __name__ == '__main__':
     main()
