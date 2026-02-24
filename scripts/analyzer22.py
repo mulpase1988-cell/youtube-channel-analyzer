@@ -247,8 +247,8 @@ def get_channel_data_hybrid(channel_id):
     videos = []
     
     try:
-        # 최근 20개만 빠르게 가져옴
-        scrape_gen = scrapetube.get_channel(channel_id, limit=20, sleep_interval=0)
+        # 최근 20개만 빠르게 가져옴 (sleep_interval 제거)
+        scrape_gen = scrapetube.get_channel(channel_id, limit=20)
         
         count = 0
         for v in scrape_gen:
