@@ -1,30 +1,45 @@
-name: YouTube Channel Analyzer
+name: YouTube Analyzer (No API - Complete)
 
 on:
   schedule:
-    - cron: '0 1 * * *'  # 매일 01:00 UTC
+     - cron: '0 1 * * *'  # 매일 01:00 UTC (서울 시간 09:00)
   workflow_dispatch:
 
 jobs:
   analyze:
     runs-on: ubuntu-latest
+    timeout-minutes: 180
+    
     steps:
-      - uses: actions/checkout@v3
+      - name: Checkout code
+        uses: actions/checkout@v3
       
-      - name: Set up Python
+      - name: Setup yt-dlp
+        uses: yt-dlp/setup-yt-dlp@latest
+      
+      - name: Set up Python 3.11
         uses: actions/setup-python@v4
         with:
           python-version: '3.11'
       
       - name: Install dependencies
         run: |
-          pip install --upgrade pip
-          pip install gspread oauth2client feedparser python-dateutil yt-dlp requests urllib3
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
       
-      - name: Run analyzer (RSS Mode - No API Calls)
+      - name: Run YouTube Analyzer
         env:
           GOOGLE_SERVICE_ACCOUNT: ${{ secrets.GOOGLE_SERVICE_ACCOUNT }}
           SHEET_NAME: '유튜브보물창고_테스트'
           DATA_TAB_NAME: '데이터'
-          RANGE: '2-50'
-        run: python scripts/analyzer22.py
+          RANGE: '2-100'
+        run: |
+          python scripts/analyzer22.py
+      
+      - name: Upload logs (on failure)
+        if: failure()
+        uses: actions/upload-artifact@v3
+        with:
+          name: analyzer-logs-${{ github.run_id }}
+          path: logs/
+          retention-days: 7
