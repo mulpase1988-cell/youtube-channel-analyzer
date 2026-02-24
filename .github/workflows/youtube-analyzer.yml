@@ -2,7 +2,7 @@ name: YouTube Analyzer (No API - Complete)
 
 on:
   schedule:
-    - cron: '0 1 * * *'  # 매일 UTC 01:00
+    - cron: '0 1 * * *'  # 매일 UTC 01:00 (한국 시간 오전 10:00)
   workflow_dispatch:
 
 jobs:
@@ -23,7 +23,10 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          # requirements.txt가 있으면 설치
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+          # [중요] requirements.txt 반영 안 됐을 경우를 대비해 필수 라이브러리 강제 설치
+          pip install scrapetube feedparser requests gspread oauth2client
       
       - name: Run YouTube Analyzer
         env:
