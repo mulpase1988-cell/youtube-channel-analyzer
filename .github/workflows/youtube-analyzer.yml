@@ -1,0 +1,30 @@
+name: YouTube Channel Analyzer
+
+on:
+  schedule:
+    - cron: '0 1 * * *'  # 매일 01:00 UTC
+  workflow_dispatch:
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+      
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install gspread oauth2client feedparser python-dateutil yt-dlp requests urllib3
+      
+      - name: Run analyzer (RSS Mode - No API Calls)
+        env:
+          GOOGLE_SERVICE_ACCOUNT: ${{ secrets.GOOGLE_SERVICE_ACCOUNT }}
+          SHEET_NAME: '유튜브보물창고_테스트'
+          DATA_TAB_NAME: '데이터'
+          RANGE: '2-50'
+        run: python scripts/analyzer.py
