@@ -13,3 +13,6 @@ python-dateutil==2.8.2
 # Step 1에 추가로 필요한 라이브러리
 requests==2.31.0
 urllib3==2.1.0
+
+# API 대체용 (새로 추가)
+yt-dlp>=2025.1.1
