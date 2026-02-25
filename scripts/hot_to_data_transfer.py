@@ -94,7 +94,8 @@ def transfer_to_data_no_cat1():
                 new_entry[1] = f"https://www.youtube.com/channel/{c_id}"         # B: URL
                 new_entry[2] = row.get('핸들명(@)', '')                          # C: 핸들
                 new_entry[3] = row.get('국가', '')                               # D: 국가
-                # new_entry[4] = ''  # E: 분류1 (수동 입력 - 비워둠)
+               new_entry[4] = '미분류'                                          # E: 분류1 (미분류로 설정)
+
                 # new_entry[5] = ''  # F: 분류2 (수동 입력 - 비워둠)
                 # new_entry[6] = ''  # G: 메모 (수동 입력 - 비워둠)
                 new_entry[7] = row.get('구독자수', 0)                            # H: 구독자
