@@ -1,8 +1,8 @@
 name: 핫데이터→데이터 이전
 
 on:
-  schedule:
-    - cron: '30 */6 * * *'  # 핫데이터 수집 30분 후 실행 (하루 4회)
+  #schedule:
+  #  - cron: '30 */6 * * *'  # 핫데이터 수집 30분 후 실행 (하루 4회)
   workflow_dispatch:        # 수동 실행 가능
 
 jobs:
