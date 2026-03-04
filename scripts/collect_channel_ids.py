@@ -1,8 +1,3 @@
-# ========================================
-# YouTube 채널 ID 수집기 - GitHub Actions 버전
-# X열이 비어있는 행만 처리
-# ========================================
-
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 import os
@@ -12,6 +7,8 @@ import re
 import time
 import sys
 import logging
+import urllib.parse  # 추가
+import json  # 추가
 
 # ========================================
 # 0. 로깅 설정
@@ -59,7 +56,21 @@ def get_range_from_input():
     return start_row, end_row
 
 # ========================================
-# 3. 채널 ID 추출 (강화된 버전)
+# 3. URL 디코딩
+# ========================================
+
+def decode_handle(handle_or_url):
+    """URL 인코딩된 핸들 디코딩"""
+    if not handle_or_url:
+        return handle_or_url
+    
+    decoded = urllib.parse.unquote(str(handle_or_url))
+    if decoded != handle_or_url:
+        logger.info(f"    📝 URL 디코딩: '{handle_or_url}' → '{decoded}'")
+    return decoded
+
+# ========================================
+# 4. 채널 ID 추출 (강화된 버전)
 # ========================================
 
 def extract_channel_id(handle_or_url):
@@ -68,7 +79,8 @@ def extract_channel_id(handle_or_url):
         logger.warning(f"    입력값 없음")
         return None
     
-    url = str(handle_or_url).strip()
+    # URL 디코딩
+    url = decode_handle(handle_or_url)
     logger.info(f"    입력: '{url}'")
     
     # 방법 1: URL에서 직접 추출
@@ -84,8 +96,8 @@ def extract_channel_id(handle_or_url):
     
     # 방법 2: @핸들 형식에서 채널 URL로 변환
     logger.info(f"    [방법2] @핸들 형식 검사...")
-    if handle_or_url.startswith('@'):
-        handle = handle_or_url[1:]  # @ 제거
+    if url.startswith('@'):
+        handle = url[1:]  # @ 제거
         logger.info(f"    핸들명: {handle}")
         url = f"https://www.youtube.com/@{handle}"
     elif not url.startswith('http'):
@@ -97,7 +109,9 @@ def extract_channel_id(handle_or_url):
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
             'Accept-Language': 'ko-KR,ko;q=0.9',
-            'Cookie': 'CONSENT=YES+KR.ko'
+            'Cookie': 'CONSENT=YES+KR.ko',
+            'Accept-Encoding': 'gzip, deflate',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
         }
         
         clean_url = url.split('/shorts')[0].split('/videos')[0].split('?')[0]
@@ -106,32 +120,45 @@ def extract_channel_id(handle_or_url):
         response = requests.get(
             clean_url,
             headers=headers,
-            timeout=REQUEST_TIMEOUT
+            timeout=REQUEST_TIMEOUT,
+            allow_redirects=True
         )
         
         if response.status_code != 200:
             logger.warning(f"    상태 코드: {response.status_code}")
             return None
         
-        logger.info(f"    상태 코드: {response.status_code}")
+        logger.info(f"    상태 코드: {response.status_code} ✓")
         
-        # 여러 패턴으로 검색
+        # 여러 패턴으로 검색 (개선된 패턴들)
         patterns = [
-            r'"channelId":"(UC[a-zA-Z0-9_-]{22})"',
-            r'channelId["\']?\s*:\s*["\']?(UC[a-zA-Z0-9_-]{22})',
-            r'data-channel-id=["\']?(UC[a-zA-Z0-9_-]{22})',
-            r'"externalChannelId":"(UC[a-zA-Z0-9_-]{22})"',
+            # 패턴 1: JSON-LD structured data
+            r'"channelId"\s*:\s*"(UC[a-zA-Z0-9_-]{22})"',
+            # 패턴 2: ytInitialData 내부
+            r'(?:channelId|externalChannelId)":"(UC[a-zA-Z0-9_-]{22})"',
+            # 패턴 3: 속성으로 직접 표시
+            r'data-channel-id\s*=\s*["\']?(UC[a-zA-Z0-9_-]{22})',
+            # 패턴 4: 메타 태그
+            r'<meta[^>]*property="?og:url"?[^>]*content="[^"]*/(UC[a-zA-Z0-9_-]{22})',
+            # 패턴 5: 일반적인 JSON 형식
+            r'"ucid"\s*:\s*"(UC[a-zA-Z0-9_-]{22})"',
+            # 패턴 6: window 객체 내부
+            r'(?:window\.)?"ytInitialData"\s*=\s*({[^;]*"channelId":"(UC[a-zA-Z0-9_-]{22})"',
         ]
         
         for i, pattern in enumerate(patterns, 1):
             match = re.search(pattern, response.text)
             if match:
-                channel_id = match.group(1)
-                logger.info(f"    패턴 {i}에서 찾음: {channel_id}")
+                # 그룹이 여러 개인 경우 마지막 그룹에서 추출
+                channel_id = match.group(match.lastindex) if match.lastindex else match.group(1)
+                
                 if channel_id.startswith('UC') and len(channel_id) == 24:
+                    logger.info(f"    패턴 {i}에서 찾음: {channel_id}")
                     logger.info(f"    ✅ 성공: {channel_id}")
                     return channel_id
         
+        # 디버그: 응답의 첫 2000자 출력 (문제 진단용)
+        logger.debug(f"    응답 샘플 (처음 2000자):\n{response.text[:2000]}")
         logger.warning(f"    패턴 매칭 실패")
         
     except requests.Timeout:
@@ -201,7 +228,7 @@ def get_rows_to_process(all_data, start_row, end_row):
             })
             logger.info(f"  ✓ Row {row_num}: '{c_value}' (X열 비어있음)")
         elif x_value:
-            logger.info(f"  ⏭️  Row {row_num}: X열에 이미 ID 있음 ('{x_value}')")
+            logger.info(f"  ⏭️  Row {row_num}: X열에 이미 ID 있음")
         elif not c_value:
             logger.info(f"  ⏭️  Row {row_num}: C열이 비어있음")
     
@@ -300,7 +327,8 @@ def main():
         logger.info("=" * 70)
         logger.info(f"✅ 성공: {success_count}개")
         logger.info(f"❌ 실패: {fail_count}개")
-        logger.info(f"📈 성공률: {success_count}/{len(rows_to_process)} ({100*success_count//len(rows_to_process)}%)")
+        if rows_to_process:
+            logger.info(f"📈 성공률: {success_count}/{len(rows_to_process)} ({100*success_count//len(rows_to_process) if rows_to_process else 0}%)")
         logger.info("=" * 70)
         
     except Exception as e:
