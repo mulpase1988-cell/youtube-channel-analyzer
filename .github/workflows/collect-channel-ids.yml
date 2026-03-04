@@ -2,7 +2,8 @@ name: 채널 ID 수집기
 
 on:
   schedule:
-    - cron: '0 0 * * 0'   # 매주 일요일 00:00 UTC (08:00 KST)
+  # 매일 오전 9시 (09:00 UTC = 18:00 KST)
+  - cron: '0 9 * * *'
   workflow_dispatch:
     inputs:
       start_row:
