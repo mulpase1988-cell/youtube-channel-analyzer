@@ -38,9 +38,16 @@ jobs:
           GOOGLE_SERVICE_ACCOUNT: ${{ secrets.GOOGLE_SERVICE_ACCOUNT }}
           SHEET_NAME: '유튜브보물창고_테스트'
           DATA_TAB_NAME: '데이터'
-          RANGE: ${{ github.event.inputs.start_row }}${{ github.event.inputs.end_row != '' && format('-{0}', github.event.inputs.end_row) || '' }}
+          START_ROW: ${{ github.event.inputs.start_row || '2' }}
+          END_ROW: ${{ github.event.inputs.end_row }}
+          REQUEST_TIMEOUT: 10        # 요청당 10초
+          MAX_RETRIES: 2             # 최대 2회 재시도
+          BATCH_UPDATE_SIZE: 50      # 50개 셀 단위로 배치 업데이트
+          MAX_WORKERS: 3             # 3개 동시 처리
         run: |
           python scripts/analyzer_github.py
+        timeout-minutes: 120
+
       
       - name: Upload logs (on failure)
         if: failure()
